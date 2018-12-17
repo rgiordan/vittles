@@ -1,0 +1,3 @@
+To make a single rst file, run something like
+
+sphinx-build -b html -d _build/doctrees . _build/html api/sensitivity_functions.rst
