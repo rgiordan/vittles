@@ -1,0 +1,34 @@
+# .travis.yml
+
+language: python
+python:
+  - 3.5
+  - 3.6
+cache:
+  directories:
+    - $HOME/.cache/pip
+    - $HOME/.ccache  # https://github.com/travis-ci/travis-ci/issues/5853
+
+notifications:
+  email:
+    recipients:
+      - rgiordan.dev@gmail.com
+    on_success: never # default: change
+    on_failure: always # default: always
+
+install:
+  # Install this package and the packages listed in requirements.txt.
+  - pip install .
+  # Install extra requirements for running tests and building docs.
+  - pip install -r requirements-dev.txt
+
+script:
+  - coverage run -m pytest  # Run the tests and check for test coverage.
+  - coverage report -m  # Generate test coverage report.
+  - codecov  # Upload the report to codecov.
+  #- flake8 --max-line-length=115  # Enforce code style (but relax line length limit a bit).
+  # doctr -- didn't work very well, incredibly hard to search for on Google.
+  #- set -e
+  #- make -C docs html  # Build the documentation.
+  #- pip install doctr
+  #- doctr deploy --built-docs docs/build/html docs/

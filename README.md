@@ -1,4 +1,4 @@
-# "Variational inference tools to leverage estimand sensitivity": `vittles`.
+# "Variational inference tools to leverage estimator sensitivity": `vittles`.
 
 [![image](https://travis-ci.org/rgiordan/vittles.svg?branch=master)](https://travis-ci.org/rgiordan/vittles)
 
