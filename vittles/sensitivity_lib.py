@@ -12,7 +12,7 @@ from scipy.linalg import cho_factor, cho_solve
 from scipy.sparse import coo_matrix
 import warnings
 
-from .function_patterns import FlattenFunctionInput
+from paragami import FlattenFunctionInput
 
 
 class HessianSolver:

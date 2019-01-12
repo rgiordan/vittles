@@ -5,19 +5,19 @@ Sensitivity Functions
 Hyperparameter sensitivity linear approximation
 -------------------------------------------------
 
-.. autoclass:: paragami.sensitivity_lib.HyperparameterSensitivityLinearApproximation
+.. autoclass:: vittles.sensitivity_lib.HyperparameterSensitivityLinearApproximation
   :members:
 
 Hyperparameter sensitivity Taylor series approximation
 ---------------------------------------------------------
 
-.. autoclass:: paragami.sensitivity_lib.ParametricSensitivityTaylorExpansion
+.. autoclass:: vittles.sensitivity_lib.ParametricSensitivityTaylorExpansion
   :members:
 
 Linear response covariances
 ----------------------------
 
-.. autoclass:: paragami.sensitivity_lib.LinearResponseCovariances
+.. autoclass:: vittles.sensitivity_lib.LinearResponseCovariances
   :members:
 
 DerivativeTerm class
@@ -25,5 +25,5 @@ DerivativeTerm class
 
 This class is used in the internals of ``ParametricSensitivityTaylorExpansion``.
 
-.. autoclass:: paragami.sensitivity_lib.DerivativeTerm
+.. autoclass:: vittles.sensitivity_lib.DerivativeTerm
   :members:
