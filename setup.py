@@ -9,7 +9,7 @@ import versioneer
 # and/or pip.
 if sys.version_info < (3, 5):
     error = """
-paragami does not support Python {0}.{2}.
+vittles does not support Python {0}.{2}.
 Python 3.5 and above is required. Check your Python version like so:
 
 python3 --version
@@ -23,7 +23,7 @@ pip install --upgrade pip
 
 here = path.abspath(path.dirname(__file__))
 
-with open(path.join(here, 'README.rst'), encoding='utf-8') as readme_file:
+with open(path.join(here, 'README.md'), encoding='utf-8') as readme_file:
     readme = readme_file.read()
 
 # Parse requirements.txt, ignoring any commented-out or git lines.
@@ -43,14 +43,14 @@ for git_req in git_requirements:
 
 
 setup(
-    name='paragami',
+    name='vittles',
     version=versioneer.get_version(),
     cmdclass=versioneer.get_cmdclass(),
     description="Python pacakge to flatten and fold parameter data structures.",
     long_description=readme,
     author="Ryan Giordano",
     author_email='rgiordan@gmail.com',
-    url='https://github.com/rgiordan/paragami',
+    url='https://github.com/rgiordan/vittles',
     packages=find_packages(exclude=['docs', 'tests']),
     entry_points={
         'console_scripts': [
@@ -59,7 +59,7 @@ setup(
         },
     include_package_data=True,
     package_data={
-        'paragami': [
+        'vittles': [
             # When adding files here, remember to update MANIFEST.in as well,
             # or else they will not be included in the distribution on PyPI!
             # 'path/to/data_file',

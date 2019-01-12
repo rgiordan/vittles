@@ -6,7 +6,7 @@ SPHINXBUILD   = sphinx-build
 #SPHINXPROJ    = PackagingScientificPython
 SOURCEDIR     = source
 BUILDDIR      = build
-SOURCEFILES  = $(shell find '../paragami/' -name '*py' | xargs)
+SOURCEFILES  = $(shell find '../vittles/' -name '*py' | xargs)
 
 
 # Put it first so that "make" without argument is like "make help".

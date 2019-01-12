@@ -6,7 +6,8 @@ from copy import deepcopy
 import itertools
 from numpy.testing import assert_array_almost_equal
 import paragami
-from paragami import sensitivity_lib
+import vittles
+from vittles import sensitivity_lib
 import scipy as sp
 from test_utils import QuadraticModel
 import unittest
@@ -28,7 +29,7 @@ class TestHessianSolver(unittest.TestCase):
                 h_solver = sensitivity_lib.HessianSolver(h, method)
                 assert_array_almost_equal(h_solver.solve(v), h_inv_v)
 
-        h_solver = paragami.sensitivity_lib.HessianSolver(h_dense, 'cg')
+        h_solver = vittles.sensitivity_lib.HessianSolver(h_dense, 'cg')
         h_solver.set_cg_options({'maxiter': 1})
         with self.assertWarns(UserWarning):
             # With only one iteration, the CG should fail and raise a warning.
@@ -91,14 +92,14 @@ class TestLinearResponseCovariances(unittest.TestCase):
                 0., np.linalg.norm(get_kl_flat_grad(mfvb_par_flat)))
 
             if init_hessian:
-                lr_covs = paragami.LinearResponseCovariances(
+                lr_covs = vittles.LinearResponseCovariances(
                     objective_fun=get_kl_flat,
                     opt_par_value=mfvb_par_flat,
                     validate_optimum=True,
                     hessian_at_opt=hess0,
                     grad_tol=1e-15)
             else:
-                lr_covs = paragami.LinearResponseCovariances(
+                lr_covs = vittles.LinearResponseCovariances(
                     objective_fun=get_kl_flat,
                     opt_par_value=mfvb_par_flat,
                     validate_optimum=True,
@@ -215,7 +216,7 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
             hyper_par_objective_fun = None
 
         parametric_sens = \
-            paragami.HyperparameterSensitivityLinearApproximation(
+            vittles.HyperparameterSensitivityLinearApproximation(
                 objective_fun=get_objective_flat,
                 opt_par_value=theta0,
                 hyper_par_value=lam0,
@@ -625,7 +626,7 @@ class TestBlockHessian(unittest.TestCase):
             inds.append(pattern.flat_indices(x_bool, free=True))
         inds = np.array(inds)
 
-        sparse_hess = paragami.SparseBlockHessian(f_flat, inds)
+        sparse_hess = vittles.SparseBlockHessian(f_flat, inds)
         block_hess = sparse_hess.get_block_hessian(x_flat)
 
         assert_array_almost_equal(np.array(block_hess.todense()), h0)

@@ -1,7 +1,7 @@
-Documentation for ``paragami``
+Documentation for ``vittles``
 ===============================
 
-Parameter folding and flattening: parameter origami, or ``paragami``.
+Parameter folding and flattening: parameter origami, or ``vittles``.
 
 This is a library (very much still in development) intended to make sensitivity
 analysis easier for optimization problems. The core functionality consists of
@@ -13,7 +13,7 @@ The purpose is to automate much of the boilerplate required to perform
 optimization and sensitivity analysis for statistical problems that employ
 optimization or estimating equations.
 
-The functionality of ``paragami`` can be divided into three mutually
+The functionality of ``vittles`` can be divided into three mutually
 supportive pieces:
 
 * Tools for converting structured parameters to and from "flattened"
