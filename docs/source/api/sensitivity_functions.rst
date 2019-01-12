@@ -14,6 +14,12 @@ Hyperparameter sensitivity Taylor series approximation
 .. autoclass:: vittles.sensitivity_lib.ParametricSensitivityTaylorExpansion
   :members:
 
+Sparse Hessians
+----------------------------
+
+.. autoclass:: vittles.sensitivity_lib.SparseBlockHessian
+  :members:
+
 Linear response covariances
 ----------------------------
 
