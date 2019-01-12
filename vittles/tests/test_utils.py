@@ -1,6 +1,6 @@
 from autograd import numpy as np
 from contextlib import contextmanager # For testing stdout
-import vittles
+import paragami
 from io import StringIO
 import sys # For testing stdout
 
@@ -24,9 +24,9 @@ class QuadraticModel(object):
         # and so that derivatives of all orders are nonzero.
         self.dim = dim
         self.theta_pattern = \
-            vittles.NumericArrayPattern(shape=(dim, ), lb=-10.)
+            paragami.NumericArrayPattern(shape=(dim, ), lb=-10.)
         self.lambda_pattern = \
-            vittles.NumericArrayPattern(shape=(dim, ), lb=-10.0)
+            paragami.NumericArrayPattern(shape=(dim, ), lb=-10.0)
 
         vec = np.linspace(0.1, 0.3, num=dim)
         self.matrix = np.outer(vec, vec) + np.eye(dim)

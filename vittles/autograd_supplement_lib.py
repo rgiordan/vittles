@@ -71,7 +71,7 @@ def get_sparse_product(z_mat):
 
     if z_mat.ndim != 2:
         raise ValueError(
-            'get_sparse_product can only be used with square matrices.')
+            'get_sparse_product can only be used with 2d arrays.')
 
     @primitive
     def z_mult(b):

@@ -1,31 +1,21 @@
+from abc import ABC, abstractmethod
 import autograd
 import json
 import numpy as np
 from scipy.sparse import coo_matrix
 
-class Pattern(object):
-    """
-    A pattern for folding and unfolding a parameter.
+class Pattern(ABC):
+    """A abstract class for a parameter pattern.
 
-    Attributes
-    ------------
-
-    Methods
-    ---------
-    __str__(): A string description of the pattern.
-    __eq__(): Check two patterns for equality.
-
-    Examples
-    ------------
-    Todo.
+    See derived classes for examples.
     """
     def __init__(self, flat_length, free_flat_length):
         """
         Parameters
         -----------
-        flat_length : int
+        flat_length : `int`
             The length of a non-free flattened vector.
-        free_flat_length : int
+        free_flat_length : `int`
             The length of a free flattened vector.
         """
         self._flat_length = flat_length
@@ -34,8 +24,130 @@ class Pattern(object):
         self._freeing_jacobian = autograd.jacobian(self._freeing_transform)
         self._unfreeing_jacobian = autograd.jacobian(self._unfreeing_transform)
 
+    # Abstract methods that must be implemented by subclasses.
+
+    @abstractmethod
     def __str__(self):
-        raise NotImplementedError()
+        pass
+
+    @abstractmethod
+    def as_dict(self):
+        """Return a dictionary of attributes describing the pattern.
+
+        The dictionary should completely describe the pattern in the sense
+        that if the contents of two patterns' dictionaries are identical
+        the patterns should be considered identical.
+
+        If the keys of the returned dictionary match the arguments to
+        ``__init__``, then the default methods for ``to_json`` and
+        ``from_json`` will work with no additional modification.
+        """
+        pass
+
+    @abstractmethod
+    def fold(self, flat_val, free, validate_value=None):
+        """Fold a flat value into a parameter.
+
+        Parameters
+        -----------
+        flat_val : `numpy.ndarray`, (N, )
+            The flattened value.
+        free : `bool`
+            Whether or not the flattened value is a free parameterization.
+        validate_value : `bool`
+            Whether to check that the folded value is valid.  If ``None``,
+            the pattern will employ a default behavior.
+
+        Returns
+        ---------
+        folded_val : Folded value
+            The parameter value in its original folded shape.
+        """
+        pass
+
+    @abstractmethod
+    def flatten(self, folded_val, free, validate_value=None):
+        """Flatten a folded value into a flat vector.
+
+        Parameters
+        -----------
+        folded_val : Folded value
+            The parameter in its original folded shape.
+        free : `bool`
+            Whether or not the flattened value is to be in a free
+            parameterization.
+        validate_value : `bool`
+            Whether to check that the folded value is valid.  If ``None``,
+            the pattern will employ a default behavior.
+
+        Returns
+        ---------
+        flat_val : ``numpy.ndarray``, (N, )
+            The flattened value.
+        """
+        pass
+
+    @abstractmethod
+    def empty(self, valid):
+        """Return an empty parameter in its folded shape.
+
+        Parameters
+        -------------
+        valid : `bool`
+            Whether or folded shape should be filled with valid values.
+
+        Returns
+        ---------
+        folded_val : Folded value
+            A parameter value in its original folded shape.
+        """
+        pass
+
+    @abstractmethod
+    def validate_folded(self, folded_val, validate_value=None):
+        """Check whether a folded value is valid.
+
+        Parameters
+        ----------------
+        folded_val : Folded value
+            A parameter value in its original folded shape.
+        validate_value : `bool`
+            Whether to validate the value in addition to the shape.  The
+            shape is always validated.
+
+        Returns
+        ------------
+        is_valid : `bool`
+            Whether ``folded_val`` is an allowable shape and value.
+        err_msg : `str`
+        """
+        pass
+
+    @abstractmethod
+    def flat_indices(self, folded_bool, free):
+        """Get which flattened indices correspond to which folded values.
+
+        Parameters
+        ------------
+        folded_bool : Folded booleans
+            A variable in the folded shape but containing booleans.  The
+            elements that are ``True`` are the ones for which we will return
+            the flat indices.
+        free : `bool`
+            Whether or not the flattened value is to be in a free
+            parameterization.
+
+        Returns
+        --------
+        indices : `numpy.ndarray` (N,)
+            A list of indices into the flattened value corresponding to
+            the ``True`` members of ``folded_bool``.
+        """
+        pass
+
+
+    ##################################################
+    # Methods that are standard for all patterns.
 
     def __eq__(self, other):
         if type(other) != type(self):
@@ -46,86 +158,28 @@ class Pattern(object):
     def json_typename(cls):
         return '.'.join([ cls.__module__, cls.__name__])
 
-    def as_dict(self):
-        """
-        Return a dictionary of attributes that determine equality.
-
-        If the keys of the returned dictionary match the arguments to
-        ``__init__``, then the default methods for ``to_json`` and
-        ``from_json`` will work.
-        """
-        raise NotImplementedError()
-
     def _freeing_transform(self, flat_val):
-        """
-        From the flat to the free flat value.
+        """From the flat to the free flat value.
         """
         return self.flatten(self.fold(flat_val, free=False), free=True)
 
     def _unfreeing_transform(self, free_flat_val):
-        """
-        From the free flat to the flat value.
+        """From the free flat to the flat value.
         """
         return self.flatten(self.fold(free_flat_val, free=True), free=False)
 
-    def fold(self, flat_val, free, validate=None):
-        """
-        Fold a flat value into a parameter.
-
-        Parameters
-        -----------
-        flat_val: 1-d float array
-            The flattened value.
-        free: Boolean
-            Whether or not the flattened value is a free parameterization.
-        validate: Boolean
-            Whether to validate that the folded value respects the constraints.
-            If None, default either to the pattern's default or, if that is
-            unspecified, to True.
-
-        Returns
-        ---------
-        The parameter value in its original "folded" shape.
-        """
-        raise NotImplementedError()
-
-    def flatten(self, folded_val, free, validate=None):
-        """
-        Flatten a folded value into a flat vector.
-
-        Parameters
-        -----------
-        folded_val
-            The parameter in its original "folded" shape.
-        free: Boolean
-            Whether or not the flattened value is to be in a free
-            parameterization.
-        validate: Boolean
-            Whether to validate that the folded value respects the constraints.
-            If None, default either to the pattern's default or, if that is
-            unspecified, to True.
-
-        Returns
-        ---------
-        1-d vector of floats
-            The flattened value.
-        """
-        raise NotImplementedError()
-
-    # Get the size of the flattened version.
     def flat_length(self, free):
-        """
-        Return the length of the pattern's flattened value.
+        """Return the length of the pattern's flattened value.
 
         Parameters
         -----------
-        free: Boolean
+        free : `bool`
             Whether or not the flattened value is to be in a free
             parameterization.
 
         Returns
         ---------
-        int
+        length : `int`
             The length of the pattern's flattened value.
         """
         if free:
@@ -133,35 +187,40 @@ class Pattern(object):
         else:
             return self._flat_length
 
-    # Methods to generate valid values.
-    def empty(self, valid):
-        """
-        Return an empty parameter in its "folded" shape.
-
-        Parameters
-        -----------
-        valid: Boolean
-            Whether or folded shape should be filled with valid values.
-
-        Returns
-        ---------
-        A parameter value in its original "folded" shape.
-        """
-        raise NotImplementedError()
-
     def random(self):
-        """
-        Return an random, valid parameter in its "folded" shape.
+        """Return an random, valid parameter in its folded shape.
+
+        .. note::
+            There is no reason this provides a meaningful distribution over
+            folded values.  This function is intended to be used as
+            a convenience for testing.
 
         Returns
         ---------
-        A random parameter value in its original "folded" shape.
+        folded_val : Folded value
+            A random parameter value in its original folded shape.
         """
         return self.fold(np.random.random(self._free_flat_length), free=True)
 
-    def freeing_jacobian(self, folded_val, sparse=True):
+    def empty_bool(self, value):
+        """Return folded shape containing booleans.
+
+        Parameters
+        -------------
+        value : `bool`
+            The value with which to fill the folded shape.
+
+        Returns
+        ---------
+        folded_bool : Folded value
+            A boolean value in its original folded shape.
         """
-        Return the Jacobian of the map from a flat free value to a flat value.
+        flat_len = self.flat_length(free=False)
+        bool_vec = np.full(flat_len, value, dtype='bool')
+        return self.fold(bool_vec, free=False, validate_value=False)
+
+    def freeing_jacobian(self, folded_val, sparse=True):
+        """The Jacobian of the map from a flat free value to a flat value.
 
         If the folded value of the parameter is ``val``, ``val_flat =
         flatten(val, free=False)``, and ``val_freeflat = flatten(val,
@@ -171,18 +230,22 @@ class Pattern(object):
 
         Parameters
         -------------
-        folded_val:
+        folded_val : Folded value
             The folded value at which the Jacobian is to be evaluated.
-        sparse: boolean
+        sparse : `bool`, optional
             Whether to return a sparse or a dense matrix.
 
         Returns
         -------------
-        Numeric matrix:
+        ``numpy.ndarray``, (N, M)
             The Jacobian matrix ``d val_free / d val_freeflat``. Consistent with
             standard Jacobian notation, the elements of ``val_free`` correspond
             to the rows of the Jacobian matrix and the elements of
             ``val_freeflat`` correspond to the columns.
+
+        See also
+        ------------
+        Pattern.unfreeing_jacobian
         """
         flat_val = self.flatten(folded_val, free=False)
         jac = self._freeing_jacobian(flat_val)
@@ -192,8 +255,7 @@ class Pattern(object):
             return jac
 
     def unfreeing_jacobian(self, folded_val, sparse=True):
-        """
-        Return the Jacobian of the map from a flat value to a flat free value.
+        """The Jacobian of the map from a flat value to a flat free value.
 
         If the folded value of the parameter is ``val``, ``val_flat =
         flatten(val, free=False)``, and ``val_freeflat = flatten(val,
@@ -203,18 +265,23 @@ class Pattern(object):
 
         Parameters
         -------------
-        folded_val:
+        folded_val : Folded value
             The folded value at which the Jacobian is to be evaluated.
-        sparse: boolean
-            Whether to return a sparse or a dense matrix.
+        sparse : `bool`, optional
+            If ``True``, return a sparse matrix.  Otherwise, return a dense
+            ``numpy`` 2d array.
 
         Returns
         -------------
-        Numeric matrix:
+        ``numpy.ndarray``, (N, N)
             The Jacobian matrix ``d val_freeflat / d val_free``. Consistent with
             standard Jacobian notation, the elements of ``val_freeflat``
             correspond to the rows of the Jacobian matrix and the elements of
             ``val_free`` correspond to the columns.
+
+        See also
+        ------------
+        Pattern.freeing_jacobian
         """
         freeflat_val = self.flatten(folded_val, free=True)
         jac = self._unfreeing_jacobian(freeflat_val)
@@ -224,8 +291,11 @@ class Pattern(object):
             return jac
 
     def to_json(self):
-        """
-        Return a JSON representation of the pattern.
+        """Return a JSON representation of the pattern.
+
+        See also
+        ------------
+        Pattern.from_json
         """
         return json.dumps(self.as_dict())
 
@@ -241,8 +311,11 @@ class Pattern(object):
 
     @classmethod
     def from_json(cls, json_string):
-        """
-        Return a pattern instance from ``json_string`` created by ``to_json``.
+        """Return a pattern from ``json_string`` created by ``to_json``.
+
+        See also
+        ------------
+        Pattern.to_json
         """
         json_dict = json.loads(json_string)
         cls._validate_json_dict_type(json_dict)

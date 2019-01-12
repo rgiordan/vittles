@@ -6,10 +6,90 @@ import autograd
 import autograd.numpy as np
 from copy import deepcopy
 from math import factorial
+import scipy as sp
+import scipy.sparse
 from scipy.linalg import cho_factor, cho_solve
+from scipy.sparse import coo_matrix
 import warnings
 
-from .function_patterns import FlattenedFunction
+from .function_patterns import FlattenFunctionInput
+
+
+class HessianSolver:
+    """A class to provide a common interface for solving :math:`H^{-1} g`.
+    """
+    def __init__(self, h, method):
+        """
+        Parameters
+        -------------
+        h : `numpy.ndarray` or `scipy.sparse` matrix
+            The "Hessian" matrix for sensitivity analysis.
+        method : {'factorization', 'cg'}
+            How to solve the system.  `factorization` uses a Cholesky decomposition,
+            and `cg` uses conjugate gradient.
+        """
+        self.__valid_methods = [ 'factorization', 'cg' ]
+        if method not in self.__valid_methods:
+            raise ValueError('method must be one of {}'.format(self.__valid_methods))
+        self._method = method
+        self.set_h(h)
+        self.set_cg_options({})
+
+    def set_h(self, h):
+        """Set the Hessian matrix.
+        """
+        self._h = h
+        self._sparse = sp.sparse.issparse(h)
+        if self._method == 'factorization':
+            if self._sparse:
+                self._solve_h = sp.sparse.linalg.factorized(self._h)
+            else:
+                self._h_chol = sp.linalg.cho_factor(self._h)
+        elif self._method == 'cg':
+            self._linop = sp.sparse.linalg.aslinearoperator(self._h)
+        else:
+            raise ValueError('Unknown method {}'.format(self._method))
+
+    def set_cg_options(self, cg_opts):
+        """Set the cg options as a dictionary.
+
+        Parameters
+        -------------
+        cg_opts : `dict`
+            A dictionary of keyword options to be passed to
+            `scipy.sparse.linalg.cg`.  If ``method`` is not ``cg``, these will be
+            ignored.
+        """
+        self._cg_opts = cg_opts
+
+    def solve(self, v):
+        """Solve the linear system :math:`H{-1} v`.
+
+        Parameters
+        ------------
+        v : `numpy.ndarray`
+            A numpy array.
+
+        Returns
+        --------
+        h_inv_v : `numpy.ndarray`
+            The value of :math:`H{-1} v`.
+        """
+        if self._method == 'factorization':
+            if self._sparse:
+                return self._solve_h(v)
+            else:
+                return sp.linalg.cho_solve(self._h_chol, v)
+        elif self._method == 'cg':
+            cg_result = sp.sparse.linalg.cg(self._linop, v, **self._cg_opts)
+            if cg_result[1] != 0:
+                warnings.warn('CG exited with error code {}'.format(cg_result[1]))
+            return cg_result[0]
+
+        else:
+            raise ValueError('Unknown method {}'.format(self._method))
+
+
 
 ##############
 # LRVB class #
@@ -23,11 +103,12 @@ class LinearResponseCovariances:
     :math:`\\theta` where the class is parameterized by the real-valued vector
     :math:`\\eta`.  Suppose that we wish to approximate a distribution
     :math:`q(\\theta | \\eta^*) \\approx p(\\theta)` by solving an optimization
-    problem :math:`\\eta^* = \\mathrm{argmin} f(\\eta)`.  For example,
-    :math:`f` might be a measure of distance between :math:`q(\\theta | \\eta)`
-    and :math:`p(\\theta)`.  This class uses the sensitivity of the optimal
-    :math:`\\eta^*` to estimate the covariance :math:`\\mathrm{Cov}_p(g(\\theta))`.
-    This covariance estimate is called the "linear response covariance".
+    problem :math:`\\eta^* = \\mathrm{argmin} f(\\eta)`.  For example, :math:`f`
+    might be a measure of distance between :math:`q(\\theta | \\eta)` and
+    :math:`p(\\theta)`.  This class uses the sensitivity of the optimal
+    :math:`\\eta^*` to estimate the covariance
+    :math:`\\mathrm{Cov}_p(g(\\theta))`. This covariance estimate is called the
+    "linear response covariance".
 
     In this notation, the arguments to the class mathods are as follows.
     :math:`f` is ``objective_fun``, :math:`\\eta^*` is ``opt_par_value``, and
@@ -37,12 +118,13 @@ class LinearResponseCovariances:
     Methods
     ------------
     set_base_values:
-        Set the base values, :math:`\\eta^*` that optimizes the objective function.
+        Set the base values, :math:`\\eta^*` that optimizes the
+        objective function.
     get_hessian_at_opt:
         Return the Hessian of the objective function evaluated at the optimum.
     get_hessian_cholesky_at_opt:
-        Return the Cholesky decomposition of the Hessian of the objective function
-        evaluated at the optimum.
+        Return the Cholesky decomposition of the Hessian of the objective
+        function evaluated at the optimum.
     get_lr_covariance:
         Return the linear response covariance of a given moment.
     """
@@ -104,24 +186,18 @@ class LinearResponseCovariances:
         self._opt0 = deepcopy(opt_par_value)
 
         # Set the values of the Hessian at the optimum.
-        self._factorize_hessian = factorize_hessian
-        if self._factorize_hessian:
-            if hessian_at_opt is None:
-                self._hess0 = self._obj_fun_hessian(self._opt0)
-            else:
-                self._hess0 = hessian_at_opt
-            self._hess0_chol = cho_factor(self._hess0)
+        if hessian_at_opt is None:
+            self._hess0 = self._obj_fun_hessian(self._opt0)
         else:
-            if hessian_at_opt is not None:
-                raise ValueError('If factorize_hessian is False, ' +
-                                 'hessian_at_opt must be None.')
-            self._hess0 = None
-            self._hess0_chol = None
+            self._hess0 = hessian_at_opt
+
+        method = 'factorization' if factorize_hessian else 'cg'
+        self.hess_solver = HessianSolver(self._hess0, method)
 
         if validate:
             # Check that the gradient of the objective is zero at the optimum.
             grad0 = self._obj_fun_grad(self._opt0)
-            newton_step = -1 * cho_solve(self._hess0_chol, grad0)
+            newton_step = -1 * self.hess_solver.solve(grad0)
 
             newton_step_norm = np.linalg.norm(newton_step)
             if newton_step_norm > grad_tol:
@@ -134,9 +210,6 @@ class LinearResponseCovariances:
     # Methods:
     def get_hessian_at_opt(self):
         return self._hess0
-
-    def get_hessian_cholesky_at_opt(self):
-        return self._hess0_chol
 
     def get_lr_covariance_from_jacobians(self,
                                          moment_jacobian1,
@@ -159,15 +232,12 @@ class LinearResponseCovariances:
         ------------
         Numeric matrix
             If ``moment_jacobian1(opt_par)`` is the Jacobian
-            of :math:`\mathbb{E}_q[g_1(\\theta)]` and ``moment_jacobian2(opt_par)``
-            is the Jacobian of  :math:`\mathbb{E}_q[g_2(\\theta)]` then this returns
-            the linear response estimate of
+            of :math:`\mathbb{E}_q[g_1(\\theta)]` and
+            ``moment_jacobian2(opt_par)``
+            is the Jacobian of  :math:`\mathbb{E}_q[g_2(\\theta)]` then this
+            returns the linear response estimate of
             :math:`\\mathrm{Cov}_p(g_1(\\theta), g_2(\\theta))`.
         """
-
-        if not self._factorize_hessian:
-            raise NotImplementedError(
-                'CG is not yet implemented for get_lr_covariance_from_jacobian')
 
         if moment_jacobian1.ndim != 2:
             raise ValueError('moment_jacobian1 must be a 2d array.')
@@ -189,8 +259,9 @@ class LinearResponseCovariances:
                          len(self._opt0), moment_jacobian2.shape)
             raise ValueError(err_msg)
 
-        return moment_jacobian1 @ cho_solve(
-            self._hess0_chol, moment_jacobian2.T)
+        # return moment_jacobian1 @ cho_solve(
+        #     self._hess0_chol, moment_jacobian2.T)
+        return moment_jacobian1 @ self.hess_solver.solve(moment_jacobian2.T)
 
     def get_moment_jacobian(self, calculate_moments):
         """
@@ -201,7 +272,8 @@ class LinearResponseCovariances:
         ------------
         calculate_moments: Callable function
             A function that takes the folded ``opt_par`` as a single argument
-            and returns a numeric vector containing posterior moments of interest.
+            and returns a numeric vector containing posterior moments of
+            interest.
 
         Returns
         ----------
@@ -219,7 +291,8 @@ class LinearResponseCovariances:
         ------------
         calculate_moments: Callable function
             A function that takes the folded ``opt_par`` as a single argument
-            and returns a numeric vector containing posterior moments of interest.
+            and returns a numeric vector containing posterior moments of
+            interest.
 
         Returns
         ------------
@@ -235,8 +308,6 @@ class LinearResponseCovariances:
             moment_jacobian, moment_jacobian)
 
 
-# TODO: Make this only into a function that operates on vectors.
-# https://github.com/rgiordan/vittles/issues/37
 class HyperparameterSensitivityLinearApproximation:
     """
     Linearly approximate dependence of an optimum on a hyperparameter.
@@ -264,10 +335,6 @@ class HyperparameterSensitivityLinearApproximation:
     :math:`\\lambda` corresponds to ``hyper_par``,
     and :math:`f` corresponds to ``objective_fun``.
 
-    Because ``opt_par`` and ``hyper_par`` in general are structured,
-    constrained data, the linear approximation is evaluated in flattened
-    space using user-specified patterns.
-
     Methods
     ------------
     set_base_values:
@@ -283,145 +350,134 @@ class HyperparameterSensitivityLinearApproximation:
         flattened space.
     predict_opt_par_from_hyper_par:
         Use the linear approximation to predict
-        the folded value of ``opt_par`` from a folded value of ``hyper_par``.
+        the value of ``opt_par`` from a value of ``hyper_par``.
     """
     def __init__(
         self,
         objective_fun,
-        opt_par_pattern, hyper_par_pattern,
-        opt_par_folded_value, hyper_par_folded_value,
-        opt_par_is_free, hyper_par_is_free,
-        validate_optimum=True,
+        opt_par_value, hyper_par_value,
+        validate_optimum=False,
         hessian_at_opt=None,
+        cross_hess_at_opt=None,
         factorize_hessian=True,
         hyper_par_objective_fun=None,
         grad_tol=1e-8):
         """
         Parameters
         --------------
-        objective_fun: Callable function
-            A callable function, optimized by ``opt_par`` at a particular value
-            of ``hyper_par``.  The function must be of the form
-            ``f(folded opt_par, folded hyper_par)``.
-        opt_par_pattern:
-            A pattern for ``opt_par``, the optimal parameter.
-        hyper_par_pattern:
-            A pattern for ``hyper_par``, the hyperparameter.
-        opt_par_folded_value:
-            The folded value of ``opt_par`` at which ``objective_fun`` is
-            optimized for the given value of ``hyper_par``.
-        hyper_par_folded_value:
-            The folded of ``hyper_par_folded_value`` at which ``opt_par``
-            optimizes ``objective_fun``.
-        opt_par_is_free: Boolean
-            Whether to use the free parameterization for ``opt_par`` when
-            linearizing.
-        hyper_par_is_free: Boolean
-            Whether to use the free parameterization for ``hyper_par`` when
-            linearizing.
-        validate_optimum: Boolean
+        objective_fun : `callable`
+            The objective function taking two positional arguments,
+            - ``opt_par``: The parameter to be optimized (`numpy.ndarray` (N,))
+            - ``hyper_par``: A hyperparameter (`numpy.ndarray` (N,))
+            and returning a real value to be minimized.
+        opt_par_value :  `numpy.ndarray` (N,)
+            The value of ``opt_par`` at which ``objective_fun`` is
+            optimized for the given value of ``hyper_par_value``.
+        hyper_par_value : `numpy.ndarray` (M,)
+            The value of ``hyper_par`` at which ``opt_par`` optimizes
+            ``objective_fun``.
+        validate_optimum : `bool`, optional
             When setting the values of ``opt_par`` and ``hyper_par``, check
             that ``opt_par`` is, in fact, a critical point of
             ``objective_fun``.
-        hessian_at_opt: Numeric matrix (optional)
+        hessian_at_opt : `numpy.ndarray` (N,N), optional
             The Hessian of ``objective_fun`` at the optimum.  If not specified,
             it is calculated using automatic differentiation.
-        factorize_hessian: Boolean
+        cross_hess_at_opt : `numpy.ndarray`  (N, M)
+            Optional.  The second derivative of the objective with respect to
+            ``input_val`` then ``hyper_val``.
+            If not specified it is calculated at initialization.
+        factorize_hessian : `bool`, optional
             If ``True``, solve the required linear system using a Cholesky
             factorization.  If ``False``, use the conjugate gradient algorithm
             to avoid forming or inverting the Hessian.
-        hyper_par_objective_fun: Callable function
-            A callable function of the form
-            ``f(folded opt_par, folded hyper_par)`` containing the part of
-            ``objective_fun`` that depends on both ``opt_par`` and
-            ``hyper_par``.  If not specified, ``objective_fun`` is used.
-        grad_tol: Float
+        hyper_par_objective_fun : `callable`, optional
+            The part of ``objective_fun`` depending on both ``opt_par`` and
+            ``hyper_par``.  The arguments must be the same as
+            ``objective_fun``:
+            - ``opt_par``: The parameter to be optimized (`numpy.ndarray` (N,))
+            - ``hyper_par``: A hyperparameter (`numpy.ndarray` (N,))
+            This can be useful if only a small part of the objective function
+            depends on both ``opt_par`` and ``hyper_par``.  If not specified,
+            ``objective_fun`` is used.
+        grad_tol : `float`, optional
             The tolerance used to check that the gradient is approximately
             zero at the optimum.
         """
 
         self._objective_fun = objective_fun
-        self._opt_par_pattern = opt_par_pattern
-        self._hyper_par_pattern = hyper_par_pattern
-        self._opt_par_is_free = opt_par_is_free
-        self._hyper_par_is_free = hyper_par_is_free
-        self._grad_tol = grad_tol
-
-        # Define flattened versions of the objective function and their
-        # autograd derivatives.
-        self._obj_fun = \
-            FlattenedFunction(
-                original_fun=self._objective_fun,
-                patterns=[self._opt_par_pattern, self._hyper_par_pattern],
-                free=[self._opt_par_is_free, self._hyper_par_is_free],
-                argnums=[0, 1])
-        self._obj_fun_grad = autograd.grad(self._obj_fun, argnum=0)
-        self._obj_fun_hessian = autograd.hessian(self._obj_fun, argnum=0)
+        self._obj_fun_grad = autograd.grad(self._objective_fun, argnum=0)
+        self._obj_fun_hessian = autograd.hessian(self._objective_fun, argnum=0)
         self._obj_fun_hvp = autograd.hessian_vector_product(
-            self._obj_fun, argnum=0)
+            self._objective_fun, argnum=0)
 
         if hyper_par_objective_fun is None:
             self._hyper_par_objective_fun = self._objective_fun
-            self._hyper_obj_fun = self._obj_fun
+            self._hyper_obj_fun = self._objective_fun
         else:
             self._hyper_par_objective_fun = hyper_par_objective_fun
-            self._hyper_obj_fun = \
-                FlattenedFunction(
-                    original_fun=self._hyper_par_objective_fun,
-                    patterns=[self._opt_par_pattern, self._hyper_par_pattern],
-                    free=[self._opt_par_is_free, self._hyper_par_is_free],
-                    argnums=[0, 1])
 
         # TODO: is this the right default order?  Make this flexible.
-        self._hyper_obj_fun_grad = autograd.grad(self._hyper_obj_fun, argnum=0)
+        self._hyper_obj_fun_grad = \
+            autograd.grad(self._hyper_par_objective_fun, argnum=0)
         self._hyper_obj_cross_hess = autograd.jacobian(
             self._hyper_obj_fun_grad, argnum=1)
 
+        self._grad_tol = grad_tol
+
         self.set_base_values(
-            opt_par_folded_value, hyper_par_folded_value,
-            hessian_at_opt, factorize_hessian, validate=validate_optimum)
+            opt_par_value, hyper_par_value,
+            hessian_at_opt, cross_hess_at_opt,
+            factorize_hessian,
+            validate_optimum=validate_optimum,
+            grad_tol=self._grad_tol)
 
     def set_base_values(self,
-                        opt_par_folded_value, hyper_par_folded_value,
-                        hessian_at_opt, factorize_hessian,
-                        validate=True, grad_tol=None):
-        if grad_tol is None:
-            grad_tol = self._grad_tol
+                        opt_par_value, hyper_par_value,
+                        hessian_at_opt, cross_hess_at_opt,
+                        factorize_hessian,
+                        validate_optimum=True, grad_tol=None):
 
         # Set the values of the optimal parameters.
-        self._opt0 = self._opt_par_pattern.flatten(
-            opt_par_folded_value, free=self._opt_par_is_free)
-        self._hyper0 = self._hyper_par_pattern.flatten(
-            hyper_par_folded_value, free=self._hyper_par_is_free)
-
-        if validate:
-            # Check that the gradient of the objective is zero at the optimum.
-            grad0 = self._obj_fun_grad(self._opt0, self._hyper0)
-            grad0_norm = np.linalg.norm(grad0)
-            if np.linalg.norm(grad0) > grad_tol:
-                err_msg = \
-                    'The gradient is not zero at the putatively optimal ' + \
-                    'values.  ||grad|| = {} > {} = grad_tol'.format(
-                        grad0_norm, grad_tol)
-                raise ValueError(err_msg)
+        self._opt0 = deepcopy(opt_par_value)
+        self._hyper0 = deepcopy(hyper_par_value)
 
         # Set the values of the Hessian at the optimum.
-        self._factorize_hessian = factorize_hessian
-        if self._factorize_hessian:
-            if hessian_at_opt is None:
-                self._hess0 = self._obj_fun_hessian(self._opt0, self._hyper0)
-            else:
-                self._hess0 = hessian_at_opt
-            self._hess0_chol = cho_factor(self._hess0)
+        if hessian_at_opt is None:
+            self._hess0 = self._obj_fun_hessian(self._opt0, self._hyper0)
         else:
-            if hessian_at_opt is not None:
-                raise ValueError('If factorize_hessian is False, ' +
-                                 'hessian_at_opt must be None.')
-            self._hess0 = None
-            self._hess0_chol = None
+            self._hess0 = hessian_at_opt
+        if self._hess0.shape != (len(self._opt0), len(self._opt0)):
+            raise ValueError('``hessian_at_opt`` is the wrong shape.')
 
-        self._cross_hess = self._hyper_obj_cross_hess(self._opt0, self._hyper0)
-        self._sens_mat = -1 * cho_solve(self._hess0_chol, self._cross_hess)
+        method = 'factorization' if factorize_hessian else 'cg'
+        self.hess_solver = HessianSolver(self._hess0, method)
+
+        if validate_optimum:
+            if grad_tol is None:
+                grad_tol = self._grad_tol
+
+            # Check that the gradient of the objective is zero at the optimum.
+            grad0 = self._obj_fun_grad(self._opt0, self._hyper0)
+            newton_step = -1 * self.hess_solver.solve(grad0)
+
+            newton_step_norm = np.linalg.norm(newton_step)
+            if newton_step_norm > grad_tol:
+                err_msg = \
+                    'The gradient is not zero at the putatively optimal ' + \
+                    'values.  ||newton_step|| = {} > {} = grad_tol'.format(
+                        newton_step_norm, grad_tol)
+                raise ValueError(err_msg)
+
+        if cross_hess_at_opt is None:
+            self._cross_hess = self._hyper_obj_cross_hess(self._opt0, self._hyper0)
+        else:
+            self._cross_hess = cross_hess_at_opt
+        if self._cross_hess.shape != (len(self._opt0), len(self._hyper0)):
+            raise ValueError('``cross_hess_at_opt`` is the wrong shape.')
+
+        self._sens_mat = -1 * self.hess_solver.solve(self._cross_hess)
+
 
     # Methods:
     def get_dopt_dhyper(self):
@@ -430,34 +486,18 @@ class HyperparameterSensitivityLinearApproximation:
     def get_hessian_at_opt(self):
         return self._hess0
 
-    def predict_opt_par_from_hyper_par(self, new_hyper_par_folded_value,
-                                       fold_output=True):
+    def predict_opt_par_from_hyper_par(self, new_hyper_par_value):
         """
         Predict ``opt_par`` using the linear approximation.
 
         Parameters
         ------------
-        new_hyper_par_folded_value:
-            The folded value of ``hyper_par`` at which to approximate
-            ``opt_par``.
-        fold_output: Boolean
-            Whether to return ``opt_par`` as a folded value.  If ``False``,
-            returns the flattened value according to ``opt_par_pattern``
-            and ``opt_par_is_free``.
+        new_hyper_par_value: `numpy.ndarray` (M,)
+            The value of ``hyper_par`` at which to approximate ``opt_par``.
         """
-
-        if not self._factorize_hessian:
-            raise NotImplementedError(
-                'CG is not yet implemented for predict_opt_par_from_hyper_par')
-
-        hyper1 = self._hyper_par_pattern.flatten(
-            new_hyper_par_folded_value, free=self._hyper_par_is_free)
-        opt_par1 = self._opt0 + self._sens_mat @ (hyper1 - self._hyper0)
-        if fold_output:
-            return self._opt_par_pattern.fold(
-                opt_par1, free=self._opt_par_is_free)
-        else:
-            return opt_par1
+        return \
+            self._opt0 + \
+            self._sens_mat @ (new_hyper_par_value - self._hyper0)
 
 
 ################################
@@ -876,17 +916,26 @@ def _get_taylor_base_terms(eval_g_derivs):
 # Given a collection of dterms (formed either with _get_taylor_base_terms
 # or derivatives), evaluate the implied dketa_depsk.
 #
-# Args:
-#   - hess0: The Hessian of the objective wrt the first argument.
-#   - dterms: An array of DerivativeTerms.
-#   - eta0: The value of the first argument.
-#   - eps0: The value of the second argument.
-#   - deps: The change in epsilon by which to multiply the Jacobians.
-def evaluate_dketa_depsk(hess0, dterms, eta0, eps0, deps):
+def evaluate_dketa_depsk(hess_solver, dterms, eta0, eps0, deps):
+    """Evaluate the kth derivative of an optimum wrt a hyperparameter.
+
+    Parameters
+    ----------------------
+    hess_solver : `HessianSolver`
+        A class to solve :math:`H^{-1} v`
+    dterms : list of `DerivativeTerm`
+        The terms contributing to the derivative.
+    eta0 : `numpy.ndarray` (N, )
+        The value of the optimization parameter.
+    eps0 : `numpy.ndarray` (M, )
+        The value of the hyperparameter.
+    deps : `numpy.ndarray` (M, )
+        The change in epsilon by which to multiply the Jacobians.
+    """
     vec = evaluate_terms(
         dterms, eta0, eps0, deps, include_highest_eta_order=False)
     assert vec is not None
-    return -1 * np.linalg.solve(hess0, vec)
+    return -1 * hess_solver.solve(vec)
 
 
 # Calculate the derivative of an array of DerivativeTerms.
@@ -897,16 +946,14 @@ def evaluate_dketa_depsk(hess0, dterms, eta0, eps0, deps):
 #
 # Returns:
 #   An array of the derivatives of dterms with respect to the second argument.
-def differentiate_terms(hess0, dterms):
+def differentiate_terms(hess_solver, dterms):
     def eval_next_eta_deriv(eta, eps, deps):
-        return evaluate_dketa_depsk(hess0, dterms, eta, eps, deps)
+        return evaluate_dketa_depsk(hess_solver, dterms, eta, eps, deps)
 
     dterms_derivs = []
     for term in dterms:
         dterms_derivs += term.differentiate(eval_next_eta_deriv)
     return _consolidate_terms(dterms_derivs)
-    return dterms_derivs
-
 
 
 class ParametricSensitivityTaylorExpansion(object):
@@ -928,25 +975,26 @@ class ParametricSensitivityTaylorExpansion(object):
     """
     def __init__(self, objective_function,
                  input_val0, hyper_val0, order,
-                 hess0=None, hyper_par_objective_function=None):
+                 hess0=None,
+                 hyper_par_objective_function=None):
         """
         Parameters
         ------------------
-        objective_function: callable function
+        objective_function : `callable`
             The optimization objective as a function of two arguments
             (eta, eps), where eta is the parameter that is optimized and
             eps is a hyperparameter.
-        input_val0: numpy array
+        input_val0 : `numpy.ndarray` (N,)
             The value of ``input_par`` at the optimum.
-        hyper_val0: numpy array
+        hyper_val0 : `numpy.ndarray` (M,)
             The value of ``hyper_par`` at which ``input_val0`` was found.
-        order: positive integer
+        order : `int`
             The maximum order of the Taylor series to be calculated.
-        hess0: numpy array
+        hess0 : `numpy.ndarray` (N, N)
             Optional.  The Hessian of the objective at
             (``input_val0``, ``hyper_val0``).
             If not specified it is calculated at initialization.
-        hyper_par_objective_function:
+        hyper_par_objective_function : `callable`
             Optional.  A function containing the dependence
             of ``objective_function`` on the hyperparameter.  Sometimes
             only a small, easily calculated part of the objective depends
@@ -971,7 +1019,7 @@ class ParametricSensitivityTaylorExpansion(object):
         else:
             self._hyper_par_objective_function = hyper_par_objective_function
 
-        self.set_base_values(input_val0, hyper_val0)
+        self.set_base_values(input_val0, hyper_val0, hess0=hess0)
         self._set_order(order)
 
     def set_base_values(self, input_val0, hyper_val0, hess0=None):
@@ -980,11 +1028,11 @@ class ParametricSensitivityTaylorExpansion(object):
 
         Parameters
         ---------------
-        input_val0: numpy array
+        input_val0: `numpy.ndarray` (N,)
             The value of input_par at the optimum.
-        hyper_val0: numpy array
+        hyper_val0: `numpy.ndarray` (M,)
             The value of hyper_par at which input_val0 was found.
-        hess0: numpy array
+        hess0: `numpy.ndarray` (N, N)
             Optional.  The Hessian of the objective at (input_val0, hyper_val0).
             If not specified it is calculated at initialization.
         """
@@ -997,7 +1045,13 @@ class ParametricSensitivityTaylorExpansion(object):
                     self._input_val0, self._hyper_val0)
         else:
             self._hess0 = hess0
-        self._hess0_chol = cho_factor(self._hess0)
+
+        # TODO: if the objective function returns a 1-d array and not a
+        # float then the Cholesky decomposition will fail because
+        # the Hessian will have an extra dimension.  This is a confusing
+        # error that we could catch explicitly at the cost of an extra
+        # function evaluation.  Is it worth it?
+        self.hess_solver = HessianSolver(self._hess0, 'factorization')
 
     # Get a function returning the next derivative from the Taylor terms dterms.
     def _get_dkinput_dhyperk_from_terms(self, dterms):
@@ -1007,7 +1061,7 @@ class ParametricSensitivityTaylorExpansion(object):
                 assert np.max(np.abs(input_val - self._input_val0)) <= tolerance
                 assert np.max(np.abs(hyper_val - self._hyper_val0)) <= tolerance
             return evaluate_dketa_depsk(
-                self._hess0, dterms,
+                self.hess_solver, dterms,
                 self._input_val0, self._hyper_val0, dhyper)
         return dkinput_dhyperk
 
@@ -1048,9 +1102,10 @@ class ParametricSensitivityTaylorExpansion(object):
 
         Parameters
         --------------
-        dhyper: numpy array
-            The direction (hyper_val - hyper_val0).
-        k: integer
+        dhyper: `numpy.ndarray` (N, )
+            The direction ``new_hyper_val - hyper_val0`` in which to evaluate
+            the directional derivative.
+        k: `int`
             The order of the derivative.
 
         Returns
@@ -1066,26 +1121,36 @@ class ParametricSensitivityTaylorExpansion(object):
         deriv_fun = self._dkinput_dhyperk_list[k - 1]
         return deriv_fun(self._input_val0, self._hyper_val0, dhyper)
 
-    def evaluate_taylor_series(self, dhyper, add_offset=True, max_order=None):
+    def evaluate_taylor_series(self, new_hyper_val,
+                               add_offset=True, max_order=None,
+                               sum_terms=True):
         """
         Evaluate the derivative ``d^k input / d hyper^k`` in the direction dhyper.
 
         Parameters
         --------------
-        dhyper: numpy array
-            The direction (hyper_val - hyper_val0).
-        add_offset: boolean
+        new_hyper_val: `numpy.ndarray` (N, )
+            The new hyperparameter value at which to evaluate the
+            Taylor series.
+        add_offset: `bool`
             Optional.  Whether to add the initial constant input_val0 to the
             Taylor series.
-        max_order: integer
+        max_order: `int`
             Optional.  The order of the Taylor series.  Defaults to the
             ``order`` argument to ``__init__``.
+        sum_terms: `bool`
+            If ``True``, add the terms in the Taylor series.  If ``False``,
+            return the terms as a list.
 
         Returns
         ------------
-            The Taylor series approximation to ``input_vak(hyper_val)`` if
+            The Taylor series approximation to ``input_val(new_hyper_val)`` if
             ``add_offset`` is ``True``, or to
-            ``input_val(hyper_val) - input_val0`` if ``False``.
+            ``input_val(new_hyper_val) - input_val0`` if ``False``.  If
+            ``sum_terms`` is ``True``, then a vector of the same length as
+            ``input_val`` is returned.  Otherwise, an array of
+            shape ``max_order + 1, len(input_val)`` is returned containing
+            the terms of the Taylor series approximation.
         """
         if max_order is None:
             max_order = self._order
@@ -1096,13 +1161,18 @@ class ParametricSensitivityTaylorExpansion(object):
                 'max_order must be no greater than the declared order={}'.format(
                     self._order))
 
-        dinput = 0
-        for k in range(1, max_order + 1):
-            dinput += self.evaluate_dkinput_dhyperk(dhyper, k) / \
-                float(factorial(k))
-
         if add_offset:
-            return dinput + self._input_val0
+            dinput = [self._input_val0]
+        else:
+            dinput = [0]
+        dhyper = new_hyper_val - self._hyper_val0
+        for k in range(1, max_order + 1):
+            dinput.append(
+                self.evaluate_dkinput_dhyperk(dhyper, k) / float(factorial(k)))
+
+        dinput = np.array(dinput)
+        if sum_terms:
+            return np.sum(dinput, axis=0)
         else:
             return dinput
 
@@ -1124,3 +1194,103 @@ class ParametricSensitivityTaylorExpansion(object):
                 print('\nTerms for order {}:'.format(order + 1))
                 for term in self._taylor_terms_list[order]:
                     print(term)
+
+
+class SparseBlockHessian():
+    """Efficiently calculate block-sparse Hessians.
+
+        The objective function is expected to be of the form
+
+        .. math ::
+            x = (x_1 , ... , x_G) \\textrm{ (or some permutation thereof)}
+
+            f(x) = \sum_{g=1}^{G} f_g(x_g)
+
+        Each :math:`x_g` is
+        expected to have the same dimension.  Consequently, the Hessian
+        matrix of ``f`` with respect to ``x``, is block diagonal with
+        ``G`` blocks, up to a permutation of the order of ``x``.
+        The purpose of this class is to efficiently calculate
+        this Hessian when the block structure (i.e., the partition of ``x``)
+        is known.
+
+    """
+    def __init__(self, objective_function, sparsity_array):
+        """In terms of the class description, ``objective_function = f``,
+        ``opt_par = x``, and ``sparsity_array`` describes
+        the partition of ``x`` into :math:`(x_1, ..., x_G)`.
+
+        Parameters
+        ------------
+        objective_function : `callable`
+            An objective function of which to calculate a Hessian.   The
+            argument should be
+
+            - ``opt_par``: `numpy.ndarray` (N,) The optimization parameter.
+
+        sparsity_array : `numpy.ndarray` (G, M)
+            An array containing the indices of rows and columns of each block.
+            The Hessian should contain ``G`` dense blocks, each of which
+            is ``M`` by ``M``.  Each row of ``sparsity_array`` should contain
+            the indices of the corresponding block.  There must be no repeated
+            indices, and each block must be the same size.
+        """
+        self._fun = objective_function
+        self._sparsity_array = sparsity_array
+        self._num_blocks = self._sparsity_array.shape[0]
+        self._block_size = self._sparsity_array.shape[1]
+
+        if len(np.unique(sparsity_array)) != len(sparsity_array.flatten()):
+            raise ValueError(
+                'The indices in ``sparsity array`` must be unique.')
+
+        self._f_grad = autograd.grad(self._fun, argnum=0)
+        self._f_fwd_hess = _append_jvp(self._f_grad, num_base_args=1)
+
+    def _hess_summed_term(self, opt_par, ib):
+        """``ib`` is the index within the block.
+        """
+        v = np.zeros_like(opt_par)
+        v[self._sparsity_array[:, ib]] = 1
+        return self._f_fwd_hess(opt_par, v)
+
+    def get_block_hessian(self, opt_par, print_every=0):
+        """Get the block Hessian at ``opt_par`` and ``weights``.
+
+        Parmeters
+        ----------
+        opt_par : `numpy.ndarray`
+            The argument to ``objective_function`` at which to evaluate
+            the Hessian matrix.
+        print_every : `int`, optional.
+            How often to display progress.  If ``0``, nothing is printed.
+
+        Returns
+        --------
+        hessian : `scipy.sparse.coo_matrix` (N, N)
+            The block-sparse Hessian given by and ``sparsity_array``.
+        """
+        opt_par = np.atleast_1d(opt_par)
+        if opt_par.ndim != 1:
+            raise ValueError('``opt_par`` must be a vector.')
+
+        mat_vals = [] # These will be the entries of the Hessian
+        mat_rows = [] # These will be the row indices
+        mat_cols = [] # These will be the column indices
+
+        for ib in range(self._block_size):
+            if print_every > 0:
+                if ib % print_every == 0:
+                    print('Block index {} of {}.'.format(ib, self._block_size))
+            hess_prod = self._hess_summed_term(opt_par, ib)
+            for b in range(self._num_blocks):
+                hess_inds = self._sparsity_array[b, :]
+                mat_vals.extend(hess_prod[hess_inds])
+                mat_rows.extend(hess_inds)
+                mat_cols.extend(np.full(self._block_size, hess_inds[ib]))
+        if print_every > 0:
+            print('Done differentiating.')
+
+        d = len(opt_par)
+        h_sparse = coo_matrix((mat_vals, (mat_rows, mat_cols)), (d, d))
+        return h_sparse

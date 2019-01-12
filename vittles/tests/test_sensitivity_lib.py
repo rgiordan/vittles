@@ -2,14 +2,37 @@
 
 import autograd
 import autograd.numpy as np
+from copy import deepcopy
 import itertools
 from numpy.testing import assert_array_almost_equal
-import vittles
-from vittles import sensitivity_lib
+import paragami
+from paragami import sensitivity_lib
 import scipy as sp
 from test_utils import QuadraticModel
 import unittest
 import warnings
+
+
+class TestHessianSolver(unittest.TestCase):
+    def test_solver(self):
+        np.random.seed(101)
+        d = 10
+        h_dense = np.random.random((d, d))
+        h_dense = h_dense + h_dense.T + d * np.eye(d)
+        h_sparse = sp.sparse.csc_matrix(h_dense)
+        v = np.random.random(d)
+        h_inv_v = np.linalg.solve(h_dense, v)
+
+        for h in [h_dense, h_sparse]:
+            for method in ['factorization', 'cg']:
+                h_solver = sensitivity_lib.HessianSolver(h, method)
+                assert_array_almost_equal(h_solver.solve(v), h_inv_v)
+
+        h_solver = paragami.sensitivity_lib.HessianSolver(h_dense, 'cg')
+        h_solver.set_cg_options({'maxiter': 1})
+        with self.assertWarns(UserWarning):
+            # With only one iteration, the CG should fail and raise a warning.
+            h_solver.solve(v)
 
 
 class TestLinearResponseCovariances(unittest.TestCase):
@@ -17,9 +40,9 @@ class TestLinearResponseCovariances(unittest.TestCase):
         np.random.seed(42)
 
         dim = 4
-        mfvb_par_pattern = vittles.PatternDict()
-        mfvb_par_pattern['mean'] = vittles.NumericArrayPattern((dim, ))
-        mfvb_par_pattern['var'] = vittles.NumericArrayPattern((dim, ))
+        mfvb_par_pattern = paragami.PatternDict()
+        mfvb_par_pattern['mean'] = paragami.NumericArrayPattern((dim, ))
+        mfvb_par_pattern['var'] = paragami.NumericArrayPattern((dim, ))
 
         mfvb_par = mfvb_par_pattern.empty(valid=True)
 
@@ -51,7 +74,7 @@ class TestLinearResponseCovariances(unittest.TestCase):
         for par_free, init_hessian in \
             itertools.product([False, True], [False, True]):
 
-            get_kl_flat = vittles.FlattenedFunction(
+            get_kl_flat = paragami.FlattenFunctionInput(
                 original_fun=get_kl, patterns=mfvb_par_pattern, free=par_free)
             get_kl_flat_grad = autograd.grad(get_kl_flat, argnum=0)
             get_kl_flat_hessian = autograd.hessian(get_kl_flat, argnum=0)
@@ -68,24 +91,22 @@ class TestLinearResponseCovariances(unittest.TestCase):
                 0., np.linalg.norm(get_kl_flat_grad(mfvb_par_flat)))
 
             if init_hessian:
-                lr_covs = vittles.LinearResponseCovariances(
+                lr_covs = paragami.LinearResponseCovariances(
                     objective_fun=get_kl_flat,
                     opt_par_value=mfvb_par_flat,
                     validate_optimum=True,
                     hessian_at_opt=hess0,
                     grad_tol=1e-15)
             else:
-                lr_covs = vittles.LinearResponseCovariances(
+                lr_covs = paragami.LinearResponseCovariances(
                     objective_fun=get_kl_flat,
                     opt_par_value=mfvb_par_flat,
                     validate_optimum=True,
                     grad_tol=1e-15)
 
             assert_array_almost_equal(hess0, lr_covs.get_hessian_at_opt())
-            # Just check that you can get the cholesky decomposition.
-            lr_covs.get_hessian_cholesky_at_opt()
 
-            get_mean_flat = vittles.FlattenedFunction(
+            get_mean_flat = paragami.FlattenFunctionInput(
                 lambda mfvb_par: mfvb_par['mean'],
                 patterns=mfvb_par_pattern,
                 free=par_free)
@@ -100,11 +121,11 @@ class TestLinearResponseCovariances(unittest.TestCase):
                     moment_jac, moment_jac))
 
             # Check cross-covariances.
-            get_mean01_flat = vittles.FlattenedFunction(
+            get_mean01_flat = paragami.FlattenFunctionInput(
                 lambda mfvb_par: mfvb_par['mean'][0:2],
                 patterns=mfvb_par_pattern,
                 free=par_free)
-            get_mean23_flat = vittles.FlattenedFunction(
+            get_mean23_flat = paragami.FlattenFunctionInput(
                 lambda mfvb_par: mfvb_par['mean'][2:4],
                 patterns=mfvb_par_pattern,
                 free=par_free)
@@ -137,22 +158,30 @@ class TestLinearResponseCovariances(unittest.TestCase):
                                     moment_jac, moment_jac[:, :, None]))
 
 
-class HyperparameterSensitivityLinearApproximation(unittest.TestCase):
+class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
     def _test_linear_approximation(self, dim,
                                    theta_free, lambda_free,
                                    use_hessian_at_opt,
+                                   use_cross_hessian_at_opt,
                                    use_hyper_par_objective_fun):
         model = QuadraticModel(dim=dim)
+        lam_folded0 = deepcopy(model.lam)
+        lam0 = model.lambda_pattern.flatten(lam_folded0, free=lambda_free)
 
         # Sanity check that the optimum is correct.
-        get_objective_flat = vittles.FlattenedFunction(
-            model.get_objective, free=theta_free, argnums=0,
-            patterns=model.theta_pattern)
-        get_objective_for_opt = vittles.Functor(
-            get_objective_flat, argnums=0)
-        get_objective_for_opt.cache_args(None, model.lam)
+        get_objective_flat = paragami.FlattenFunctionInput(
+            model.get_objective,
+            free=[theta_free, lambda_free],
+            argnums=[0, 1],
+            patterns=[model.theta_pattern, model.lambda_pattern])
+        get_objective_for_opt = lambda x: get_objective_flat(x, lam0)
         get_objective_for_opt_grad = autograd.grad(get_objective_for_opt)
         get_objective_for_opt_hessian = autograd.hessian(get_objective_for_opt)
+
+        get_objective_for_sens_grad = \
+            autograd.grad(get_objective_flat, argnum=0)
+        get_objective_for_sens_cross_hess = \
+            autograd.jacobian(get_objective_for_sens_grad, argnum=1)
 
         opt_output = sp.optimize.minimize(
             fun=get_objective_for_opt,
@@ -160,78 +189,93 @@ class HyperparameterSensitivityLinearApproximation(unittest.TestCase):
             x0=np.zeros(model.dim),
             method='BFGS')
 
-        theta0 = model.get_true_optimal_theta(model.lam)
-        theta_flat = model.theta_pattern.flatten(theta0, free=theta_free)
-        assert_array_almost_equal(theta_flat, opt_output.x)
+        theta_folded_0 = model.get_true_optimal_theta(model.lam)
+        theta0 = model.theta_pattern.flatten(theta_folded_0, free=theta_free)
+        assert_array_almost_equal(theta0, opt_output.x)
 
         # Instantiate the sensitivity object.
         if use_hessian_at_opt:
-            hess0 = get_objective_for_opt_hessian(theta_flat)
+            hess0 = get_objective_for_opt_hessian(theta0)
         else:
             hess0 = None
 
+        if use_cross_hessian_at_opt:
+            cross_hess0 = get_objective_for_sens_cross_hess(theta0, lam0)
+        else:
+            cross_hess0 = None
+
         if use_hyper_par_objective_fun:
-            hyper_par_objective_fun = model.get_hyper_par_objective
+            hyper_par_objective_fun = \
+                paragami.FlattenFunctionInput(
+                    model.get_hyper_par_objective,
+                    free=[theta_free, lambda_free],
+                    argnums=[0, 1],
+                    patterns=[model.theta_pattern, model.lambda_pattern])
         else:
             hyper_par_objective_fun = None
 
         parametric_sens = \
-            vittles.HyperparameterSensitivityLinearApproximation(
-                objective_fun=model.get_objective,
-                opt_par_pattern=model.theta_pattern,
-                hyper_par_pattern=model.lambda_pattern,
-                opt_par_folded_value=theta0,
-                hyper_par_folded_value=model.lam,
-                opt_par_is_free=theta_free,
-                hyper_par_is_free=lambda_free,
+            paragami.HyperparameterSensitivityLinearApproximation(
+                objective_fun=get_objective_flat,
+                opt_par_value=theta0,
+                hyper_par_value=lam0,
                 hessian_at_opt=hess0,
-                hyper_par_objective_fun=hyper_par_objective_fun)
+                cross_hess_at_opt=cross_hess0,
+                hyper_par_objective_fun=hyper_par_objective_fun,
+                validate_optimum=True)
 
-        epsilon = 0.01
-        lambda1 = model.lam + epsilon
+        epsilon = 0.001
+        lam1 = lam0 + epsilon
+        lam_folded1 = model.lambda_pattern.fold(lam1, free=lambda_free)
 
         # Check the optimal parameters
         pred_diff = \
-            parametric_sens.predict_opt_par_from_hyper_par(lambda1) - theta0
-        true_diff = model.get_true_optimal_theta(lambda1) - theta0
+            parametric_sens.predict_opt_par_from_hyper_par(lam1) - theta0
+        true_theta_folded1 = model.get_true_optimal_theta(lam_folded1)
+        true_theta1 = \
+            model.theta_pattern.flatten(true_theta_folded1, free=theta_free)
+        true_diff = true_theta1 - theta0
 
         if (not theta_free) and (not lambda_free):
-            # The model is linear in lambda, so the prediction should be exact.
+            # The optimum is linear in lambda, so the prediction
+            # should be exact.
             assert_array_almost_equal(pred_diff, true_diff)
         else:
             # Check the relative error.
             error = np.abs(pred_diff - true_diff)
-            tol = epsilon * np.mean(np.abs(true_diff))
+            tol = 0.01 * np.max(np.abs(true_diff))
             if not np.all(error < tol):
-                print('Error in linear approximation: ', error, tol)
+                print('Error in linear approximation: ',
+                      error, tol, pred_diff, true_diff)
             self.assertTrue(np.all(error < tol))
 
         # Test the Jacobian.
-        get_true_optimal_theta_lamflat = vittles.FlattenedFunction(
-            model.get_true_optimal_theta, patterns=model.lambda_pattern,
-            free=lambda_free, argnums=0)
+        get_true_optimal_theta_lamflat = \
+            paragami.FlattenFunctionInput(
+                model.get_true_optimal_theta,
+                patterns=model.lambda_pattern,
+                free=lambda_free, argnums=0)
         def get_true_optimal_theta_flat(lam_flat):
-            theta0 = get_true_optimal_theta_lamflat(lam_flat)
-            return model.theta_pattern.flatten(theta0, free=theta_free)
+            theta_folded = get_true_optimal_theta_lamflat(lam_flat)
+            return model.theta_pattern.flatten(theta_folded, free=theta_free)
 
         get_dopt_dhyper = autograd.jacobian(get_true_optimal_theta_flat)
-        lambda_flat = model.lambda_pattern.flatten(model.lam, free=lambda_free)
         assert_array_almost_equal(
-            get_dopt_dhyper(lambda_flat),
+            get_dopt_dhyper(lam0),
             parametric_sens.get_dopt_dhyper())
 
     def test_quadratic_model(self):
         ft_vec = [False, True]
         dim = 3
-        for (theta_free, lambda_free, use_hess, use_hyperobj) in \
-            itertools.product(ft_vec, ft_vec, ft_vec, ft_vec):
+        for (theta_free, lambda_free, use_hess, use_hyperobj, use_cross_hess) in \
+            itertools.product(ft_vec, ft_vec, ft_vec, ft_vec, ft_vec):
 
             print(('theta_free: {}, lambda_free: {}, ' +
                    'use_hess: {}, use_hyperobj: {}').format(
                    theta_free, lambda_free, use_hess, use_hyperobj))
             self._test_linear_approximation(
                 dim, theta_free, lambda_free,
-                use_hess, use_hyperobj)
+                use_hess, use_cross_hess, use_hyperobj)
 
 
 class TestTaylorExpansion(unittest.TestCase):
@@ -254,7 +298,7 @@ class TestTaylorExpansion(unittest.TestCase):
             model.get_true_optimal_theta(model.lam), free=eta_is_free)
         eps0 = model.lambda_pattern.flatten(model.lam, free=eps_is_free)
 
-        objective = vittles.FlattenedFunction(
+        objective = paragami.FlattenFunctionInput(
             original_fun=model.get_objective,
             patterns=[model.theta_pattern, model.lambda_pattern],
             free=[eta_is_free, eps_is_free],
@@ -277,7 +321,7 @@ class TestTaylorExpansion(unittest.TestCase):
             theta = model.get_true_optimal_theta(lam)
             return model.theta_pattern.flatten(theta, free=eta_is_free)
 
-        get_true_optimal_flat_theta = vittles.FlattenedFunction(
+        get_true_optimal_flat_theta = paragami.FlattenFunctionInput(
             original_fun=get_true_optimal_flat_theta,
             patterns=model.lambda_pattern,
             free=eps_is_free,
@@ -460,32 +504,33 @@ class TestTaylorExpansion(unittest.TestCase):
             dg_deps(eta0, eps0, deps),
             dterms1[0].evaluate(eta0, eps0, deps))
 
+        hess_solver = sensitivity_lib.HessianSolver(hess0, 'factorization')
         assert_array_almost_equal(
             np.einsum('ij,j', true_deta_deps(eps0), deps),
             sensitivity_lib.evaluate_dketa_depsk(
-                hess0, dterms1, eta0, eps0, deps))
+                hess_solver, dterms1, eta0, eps0, deps))
 
         assert_array_almost_equal(
             eval_deta_deps(eta0, eps0, deps),
             sensitivity_lib.evaluate_dketa_depsk(
-                hess0, dterms1, eta0, eps0, deps))
+                hess_solver, dterms1, eta0, eps0, deps))
 
-        dterms2 = sensitivity_lib.differentiate_terms(hess0, dterms1)
+        dterms2 = sensitivity_lib.differentiate_terms(hess_solver, dterms1)
         self.assertTrue(np.linalg.norm(sensitivity_lib.evaluate_dketa_depsk(
-            hess0, dterms2, eta0, eps0, deps)) > 0)
+            hess_solver, dterms2, eta0, eps0, deps)) > 0)
         assert_array_almost_equal(
             np.einsum('ijk,j, k', true_d2eta_deps2(eps0), deps, deps),
             sensitivity_lib.evaluate_dketa_depsk(
-                hess0, dterms2, eta0, eps0, deps))
+                hess_solver, dterms2, eta0, eps0, deps))
 
-        dterms3 = sensitivity_lib.differentiate_terms(hess0, dterms2)
+        dterms3 = sensitivity_lib.differentiate_terms(hess_solver, dterms2)
         self.assertTrue(np.linalg.norm(sensitivity_lib.evaluate_dketa_depsk(
-            hess0, dterms3, eta0, eps0, deps)) > 0)
+            hess_solver, dterms3, eta0, eps0, deps)) > 0)
 
         assert_array_almost_equal(
             np.einsum('ijkl,j,k,l', true_d3eta_deps3(eps0), deps, deps, deps),
             sensitivity_lib.evaluate_dketa_depsk(
-                hess0, dterms3, eta0, eps0, deps))
+                hess_solver, dterms3, eta0, eps0, deps))
 
         ###################################
         # Test the Taylor series itself.
@@ -516,20 +561,74 @@ class TestTaylorExpansion(unittest.TestCase):
             d3, taylor_expansion.evaluate_dkinput_dhyperk(deps, k=3))
 
         assert_array_almost_equal(
-            eta0 + d1, taylor_expansion.evaluate_taylor_series(
-                deps, max_order=1))
+            eta0 + d1,
+            taylor_expansion.evaluate_taylor_series(eps1, max_order=1))
 
         assert_array_almost_equal(
             eta0 + d1 + 0.5 * d2,
-            taylor_expansion.evaluate_taylor_series(deps, max_order=2))
+            taylor_expansion.evaluate_taylor_series(eps1, max_order=2))
 
         assert_array_almost_equal(
             eta0 + d1 + d2 / 2 + d3 / 6,
-            taylor_expansion.evaluate_taylor_series(deps, max_order=3))
+            taylor_expansion.evaluate_taylor_series(eps1, max_order=3))
 
         assert_array_almost_equal(
             eta0 + d1 + d2 / 2 + d3 / 6,
-            taylor_expansion.evaluate_taylor_series(deps))
+            taylor_expansion.evaluate_taylor_series(eps1))
+
+        terms = taylor_expansion.evaluate_taylor_series(
+            eps1, max_order=3, sum_terms=False)
+        assert_array_almost_equal(
+            taylor_expansion.evaluate_taylor_series(eps1, max_order=3),
+            np.sum(terms, axis=0))
+
+
+class TestBlockHessian(unittest.TestCase):
+    def test_hessian(self):
+        np.random.seed(42)
+
+        group_size = 3
+        num_groups = 10
+        d = group_size * num_groups
+
+        # def get_pd_mat(d):
+        #     a = np.random.random((d, d))
+        #     a = a + a.T + np.eye(d)
+        #     return a
+        #
+        # group_mats = np.array([ get_pd_mat(group_size) for g in range(num_groups) ])
+        pattern = paragami.PatternDict()
+        pattern['array'] = \
+            paragami.NumericArrayPattern((num_groups, group_size))
+        mat_pattern = paragami.PSDSymmetricMatrixPattern(size=group_size)
+        pattern['mats'] = paragami.PatternArray((num_groups,), mat_pattern)
+
+        def f(x_dict):
+            return 0.5 * np.einsum(
+                'nij,ni,nj', x_dict['mats'], x_dict['array'], x_dict['array'])
+
+        f_flat = paragami.FlattenFunctionInput(
+            f, argnums=0, free=True, patterns=pattern)
+
+        x = pattern.random()
+        x_flat = pattern.flatten(x, free=True)
+        f(x)
+
+        f_hess = autograd.hessian(f_flat, argnum=0)
+        h0 = f_hess(x_flat)
+
+        inds = []
+        for g in range(num_groups):
+            x_bool = pattern.empty_bool(False)
+            x_bool['array'][g, :] = True
+            x_bool['mats'][g, :, :] = True
+            inds.append(pattern.flat_indices(x_bool, free=True))
+        inds = np.array(inds)
+
+        sparse_hess = paragami.SparseBlockHessian(f_flat, inds)
+        block_hess = sparse_hess.get_block_hessian(x_flat)
+
+        assert_array_almost_equal(np.array(block_hess.todense()), h0)
 
 
 if __name__ == '__main__':

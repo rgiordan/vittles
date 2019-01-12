@@ -1,6 +1,6 @@
-#####################################
-"Parameter origami": ``vittles``.
-#####################################
+#############################################################################
+"Variational inference tools to leverage estimand sensitivity": ``vittles``.
+#############################################################################
 
 .. image:: https://travis-ci.org/rgiordan/vittles.svg?branch=master
     :target: https://travis-ci.org/rgiordan/vittles

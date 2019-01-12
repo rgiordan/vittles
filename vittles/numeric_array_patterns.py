@@ -6,16 +6,12 @@ import json
 
 
 def _unconstrain_array(array, lb, ub):
-    if not (array <= ub).all():
-        raise ValueError('Elements larger than the upper bound')
-    if not (array >= lb).all():
-        raise ValueError('Elements smaller than the lower bound')
-    if ub <= lb:
-        raise ValueError('Upper bound must be greater than lower bound')
+    # Assume that the inputs obey the constraints, lb < ub and
+    # lb <= array <= ub, which are checked in the pattern.
     if ub == float("inf"):
         if lb == -float("inf"):
             # For consistent behavior, never return a reference.
-            #return copy.deepcopy(array)
+            # Note that deepcopy will cause autograd to fail.
             return copy.copy(array)
         else:
             return np.log(array - lb)
@@ -27,8 +23,7 @@ def _unconstrain_array(array, lb, ub):
 
 
 def _constrain_array(free_array, lb, ub):
-    if ub <= lb:
-        raise ValueError('Upper bound must be greater than lower bound')
+    # Assume that lb < ub, which is checked in the pattern.
     if ub == float("inf"):
         if lb == -float("inf"):
             # For consistency, never return a reference.
@@ -67,17 +62,12 @@ class NumericArrayPattern(Pattern):
 
     Attributes
     -------------
-    default_validate: Bool
+    default_validate: `bool`, optional
         Whether or not the array is checked by default to lie within the
         specified bounds.
-
-    Methods
-    ----------------
-    validate_folded: Check whether the folded array lies within the bounds.
     """
     def __init__(self, shape,
                  lb=-float("inf"), ub=float("inf"), default_validate=True):
-
         """
         Parameters
         -------------
@@ -92,101 +82,102 @@ class NumericArrayPattern(Pattern):
             specified bounds.
         """
         self.default_validate = default_validate
-        self.__shape = tuple(shape)
-        self.__lb = lb
-        self.__ub = ub
+        self._shape = tuple(shape)
+        self._lb = lb
+        self._ub = ub
         assert lb >= -float('inf')
         assert ub <= float('inf')
         if lb >= ub:
             raise ValueError(
                 'Upper bound ub must strictly exceed lower bound lb')
 
-        free_flat_length = flat_length = int(np.product(self.__shape))
+        free_flat_length = flat_length = int(np.product(self._shape))
 
         super().__init__(flat_length, free_flat_length)
 
     def __str__(self):
         return 'NumericArrayPattern {} (lb={}, ub={})'.format(
-            self.__shape, self.__lb, self.__ub)
+            self._shape, self._lb, self._ub)
 
     def as_dict(self):
         return {
             'pattern': self.json_typename(),
-            'lb': self.__lb,
-            'ub': self.__ub,
-            'shape': self.__shape,
+            'lb': self._lb,
+            'ub': self._ub,
+            'shape': self._shape,
             'default_validate': self.default_validate}
 
     def empty(self, valid):
         if valid:
             return np.full(
-                self.__shape, _get_inbounds_value(self.__lb, self.__ub))
+                self._shape, _get_inbounds_value(self._lb, self._ub))
         else:
-            return np.empty(self.__shape)
+            return np.empty(self._shape)
 
-    def check_folded(self, folded_val, validate=None):
+    def _validate_folded_shape(self, folded_val):
         if folded_val.shape != self.shape():
-            raise ValueError('Wrong size for Array.' +
-                             ' Expected shape: ' + str(self.shape()) +
-                             ' Got shape: ' + str(folded_val.shape))
-        if validate is None:
-            validate = self.default_validate
-        if validate:
-            if (np.array(folded_val < self.__lb)).any():
-                raise ValueError('Value beneath lower bound.')
-            if (np.array(folded_val > self.__ub)).any():
-                raise ValueError('Value above upper bound.')
-
-    def _free_fold(self, free_flat_val):
-        if free_flat_val.size != self._free_flat_length:
-            error_string = \
-                'Wrong size for Array.  Expected {}, got {}'.format(
-                    str(self._free_flat_length),
-                    str(free_flat_val.size))
-            raise ValueError(error_string)
-        constrained_array = \
-            _constrain_array(free_flat_val, self.__lb, self.__ub)
-        return constrained_array.reshape(self.__shape)
-
-    def _free_flatten(self, folded_val, validate=None):
-        self.check_folded(folded_val, validate)
-        return _unconstrain_array(folded_val, self.__lb, self.__ub).flatten()
-
-    def _notfree_fold(self, flat_val, validate=None):
-        if flat_val.size != self._flat_length:
-            error_string = \
-                'Wrong size for Array.  Expected {}, got {}'.format(
-                    str(self._flat_length), str(flat_val.size))
-            raise ValueError(error_string)
-        folded_val = flat_val.reshape(self.__shape)
-        self.check_folded(folded_val, validate)
-        return folded_val
-
-    def _notfree_flatten(self, folded_val, validate=None):
-        self.check_folded(folded_val, validate)
-        return folded_val.flatten()
-
-    def fold(self, flat_val, free, validate=None):
-        flat_val = np.atleast_1d(flat_val)
-        if len(flat_val.shape) != 1:
-            raise ValueError('The argument to fold must be a 1d vector.')
-        if free:
-            return self._free_fold(flat_val)
+            err_msg = ('Wrong size for array.' +
+                       ' Expected shape: ' + str(self.shape()) +
+                       ' Got shape: ' + str(folded_val.shape))
+            return False, err_msg
         else:
-            return self._notfree_fold(flat_val, validate)
+            return True, ''
 
-    def flatten(self, folded_val, free, validate=None):
+    def validate_folded(self, folded_val, validate_value=None):
         folded_val = np.atleast_1d(folded_val)
+        shape_ok, err_msg = self._validate_folded_shape(folded_val)
+        if not shape_ok:
+            return shape_ok, err_msg
+        if validate_value is None:
+            validate_value = self.default_validate
+        if validate_value:
+            if (np.array(folded_val < self._lb)).any():
+                return False, 'Value beneath lower bound.'
+            if (np.array(folded_val > self._ub)).any():
+                return False, 'Value above upper bound.'
+        return True, ''
+
+    def fold(self, flat_val, free, validate_value=None):
+        flat_val = np.atleast_1d(flat_val)
+
+        if flat_val.ndim != 1:
+            raise ValueError('The argument to fold must be a 1d vector.')
+
+        expected_length = self.flat_length(free=free)
+        if flat_val.size != expected_length:
+            error_string = \
+                'Wrong size for array.  Expected {}, got {}'.format(
+                    str(expected_length),
+                    str(flat_val.size))
+            raise ValueError(error_string)
+
         if free:
-            return self._free_flatten(folded_val, validate)
+            constrained_array = \
+                _constrain_array(flat_val, self._lb, self._ub)
+            return constrained_array.reshape(self._shape)
         else:
-            return self._notfree_flatten(folded_val, validate)
+            folded_val = flat_val.reshape(self._shape)
+            valid, msg = self.validate_folded(folded_val, validate_value)
+            if not valid:
+                raise ValueError(msg)
+            return folded_val
+
+    def flatten(self, folded_val, free, validate_value=None):
+        folded_val = np.atleast_1d(folded_val)
+        valid, msg = self.validate_folded(folded_val, validate_value)
+        if not valid:
+            raise ValueError(msg)
+        if free:
+            return \
+                _unconstrain_array(folded_val, self._lb, self._ub).flatten()
+        else:
+            return folded_val.flatten()
 
     def shape(self):
-        return self.__shape
+        return self._shape
 
     def bounds(self):
-        return self.__lb, self.__ub
+        return self._lb, self._ub
 
     def flat_length(self, free):
         if free:
@@ -194,5 +185,61 @@ class NumericArrayPattern(Pattern):
         else:
             return self._flat_length
 
+    def flat_indices(self, folded_bool, free):
+        folded_bool = np.atleast_1d(folded_bool)
+        shape_ok, err_msg = self._validate_folded_shape(folded_bool)
+        if not shape_ok:
+            raise ValueError(err_msg)
+        folded_indices = self.fold(
+            np.arange(self.flat_length(free)),
+            validate_value=False, free=False)
+        return folded_indices[folded_bool]
 
+
+
+class NumericVectorPattern(NumericArrayPattern):
+    """A pattern for a (optionally bounded) numeric vector.
+
+    See Also
+    ------------
+    NumericArrayPattern
+    """
+    def __init__(self, length, lb=-float("inf"), ub=float("inf"),
+                 default_validate=True):
+        super().__init__(shape=(length, ), lb=lb, ub=ub,
+                         default_validate=default_validate)
+
+    def length(self):
+        return self._shape[0]
+
+    def as_dict(self):
+        return {
+            'pattern': self.json_typename(),
+            'length': self.length(),
+            'lb': self._lb,
+            'ub': self._ub,
+            'default_validate': self.default_validate}
+
+
+class NumericScalarPattern(NumericArrayPattern):
+    """A pattern for a (optionally bounded) numeric scalar.
+
+    See Also
+    ------------
+    NumericArrayPattern
+    """
+    def __init__(self, lb=-float("inf"), ub=float("inf"),
+                 default_validate=True):
+        super().__init__(shape=(1, ), lb=lb, ub=ub,
+                         default_validate=default_validate)
+
+    def as_dict(self):
+        return {
+            'pattern': self.json_typename(),
+            'lb': self._lb,
+            'ub': self._ub,
+            'default_validate': self.default_validate}
+
+register_pattern_json(NumericVectorPattern)
+register_pattern_json(NumericScalarPattern)
 register_pattern_json(NumericArrayPattern)

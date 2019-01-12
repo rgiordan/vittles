@@ -156,6 +156,8 @@ def _unpack_posdef_matrix(free_vec, diag_lb=0.0):
 
 # Convert a vector containing the lower diagonal portion of a symmetric
 # matrix into the full symmetric matrix.
+#
+# This is not currently used but could be useful for a symmetric matrix type.
 def _unvectorize_symmetric_matrix(vec_val):
     ld_mat = _unvectorize_ld_matrix(vec_val)
     mat_val = ld_mat + ld_mat.transpose()
@@ -168,8 +170,7 @@ def _unvectorize_symmetric_matrix(vec_val):
 
 
 class PSDSymmetricMatrixPattern(Pattern):
-    """
-    A pattern for a symmetric, positive-definite matrix parameter.
+    """A pattern for a symmetric, positive-definite matrix parameter.
 
     Attributes
     -------------
@@ -210,20 +211,17 @@ class PSDSymmetricMatrixPattern(Pattern):
             'default_validate': self.default_validate}
 
     def size(self):
-        """
-        Returns the matrix size.
+        """Returns the matrix size.
         """
         return self.__size
 
     def shape(self):
-        """
-        Returns the matrix shape, i.e., (size, size).
+        """Returns the matrix shape, i.e., (size, size).
         """
         return (self.__size, self.__size)
 
     def diag_lb(self):
-        """
-        Returns the diagonal lower bound.
+        """Returns the diagonal lower bound.
         """
         return self.__diag_lb
 
@@ -233,13 +231,20 @@ class PSDSymmetricMatrixPattern(Pattern):
         else:
             return np.empty((self.__size, self.__size))
 
-    def check_folded(self, folded_val, validate=None):
-        """
-        Check that the folded value is valid.
+    def _validate_folded_shape(self, folded_val):
+        expected_shape = (self.__size, self.__size)
+        if folded_val.shape != (self.__size, self.__size):
+            return \
+                False, 'The matrix is not of shape {}'.format(expected_shape)
+        else:
+            return True, ''
 
-        If `validate = True`, checks that `folded_val` is a symmetric,
-        positive-definite matrix of the correct shape with diagonal entries
-        greater than the specified lower bound.  If `validate = False`,
+    def validate_folded(self, folded_val, validate_value=None):
+        """Check that the folded value is valid.
+
+        If `validate_value = True`, checks that `folded_val` is a symmetric,
+        matrix of the correct shape with diagonal entries
+        greater than the specified lower bound.  Otherwise,
         only the shape is checked.
 
         .. note::
@@ -247,42 +252,48 @@ class PSDSymmetricMatrixPattern(Pattern):
 
         Parameters
         -----------
-        folded_val: A numpy array
+        folded_val : Folded value
             A candidate value for a positive definite matrix.
-        validate: Boolean
+        validate_value: `bool`, optional
             Whether to check the matrix for attributes other than shape.
+            If `None`, the value of `self.default_validate` is used.
 
-        Raises
+        Returns
         ----------
-        If `folded_val` is not a valid matrix, raises a `ValueError`.
+        is_valid : `bool`
+            Whether ``folded_val`` is a valid positive semi-definite matrix.
+        err_msg : `str`
+            A message describing the reason the value is invalid or an empty
+            string if the value is valid.
         """
-        if folded_val.shape != (self.__size, self.__size):
-            raise ValueError('Wrong shape for PDMatrix.')
+        shape_ok, err_msg = self._validate_folded_shape(folded_val)
+        if not shape_ok:
+            raise ValueError(err_msg)
 
-        if validate is None:
-            validate = self.default_validate
-        if validate:
+        if validate_value is None:
+            validate_value = self.default_validate
+
+        if validate_value:
             if np.any(np.diag(folded_val) < self.__diag_lb):
                 error_string = \
                     'Diagonal is less than the lower bound {}.'.format(
                         self.__diag_lb)
-                raise ValueError(error_string)
+                return False, error_string
             if not (folded_val.transpose() == folded_val).all():
-                raise ValueError('Matrix is not symmetric')
-            # TODO: check for positive definiteness?
-            # try:
-            #     chol = onp.linalg.cholesky(folded_val)
-            # except LinAlgError:
-            #     raise ValueError('Matrix is not positive definite.')
+                return False, 'Matrix is not symmetric.'
 
-    def flatten(self, folded_val, free, validate=None):
-        self.check_folded(folded_val, validate)
+        return True, ''
+
+    def flatten(self, folded_val, free, validate_value=None):
+        valid, msg = self.validate_folded(folded_val, validate_value)
+        if not valid:
+            raise ValueError(msg)
         if free:
             return _pack_posdef_matrix(folded_val, diag_lb=self.__diag_lb)
         else:
             return folded_val.flatten()
 
-    def fold(self, flat_val, free, validate=None):
+    def fold(self, flat_val, free, validate_value=None):
         flat_val = np.atleast_1d(flat_val)
         if len(flat_val.shape) != 1:
             raise ValueError('The argument to fold must be a 1d vector.')
@@ -293,8 +304,30 @@ class PSDSymmetricMatrixPattern(Pattern):
             return _unpack_posdef_matrix(flat_val, diag_lb=self.__diag_lb)
         else:
             folded_val = np.reshape(flat_val, (self.__size, self.__size))
-            self.check_folded(folded_val, validate)
+            valid, msg = self.validate_folded(folded_val, validate_value)
+            if not valid:
+                raise ValueError(msg)
             return folded_val
+
+    def flat_indices(self, folded_bool, free):
+        shape_ok, err_msg = self._validate_folded_shape(folded_bool)
+        if not shape_ok:
+            raise ValueError(err_msg)
+        if not free:
+            folded_indices = self.fold(
+                np.arange(self.flat_length(False)),
+                validate_value=False, free=False)
+            return folded_indices[folded_bool]
+        else:
+            # This indicates that each folded value depends on each
+            # free value.  I think this is not true, but getting the exact
+            # pattern may be complicated and will
+            # probably not make much of a difference in practice.
+            if np.any(folded_bool):
+                return np.arange(self.flat_length(True))
+            else:
+                return np.array([])
+
 
 
 register_pattern_json(PSDSymmetricMatrixPattern)

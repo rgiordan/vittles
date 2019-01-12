@@ -6,12 +6,75 @@ from numpy.testing import assert_array_almost_equal
 import numpy as np
 import scipy as sp
 
+import itertools
 import json
 import collections
 
-import vittles
+import paragami
 
 from autograd.test_util import check_grads
+
+# A pattern that matches no actual types for causing errors to test.
+class BadTestPattern(paragami.base_patterns.Pattern):
+    def __init__(self):
+        pass
+
+    def __str__(self):
+        return 'BadTestPattern'
+
+    def as_dict(self):
+        return { 'pattern': 'bad_test_pattern' }
+
+    def fold(self, flat_val, validate_value=None):
+        return 0
+
+    def flatten(self, flat_val, validate_value=None):
+        return 0
+
+    def empty(self):
+        return 0
+
+    def validate_folded(self, folded_val, validate_value=None):
+        return True, ''
+
+    def flat_indices(self, folded_bool, free):
+        return []
+
+
+def _test_array_flat_indices(testcase, pattern):
+    free_len = pattern.flat_length(free=True)
+    flat_len = pattern.flat_length(free=False)
+    manual_jac = np.zeros((free_len, flat_len))
+
+    for ind in range(flat_len):
+        bool_vec = np.full(flat_len, False, dtype='bool')
+        bool_vec[ind] = True
+        x_bool = pattern.fold(bool_vec, free=False, validate_value=False)
+        flat_ind = pattern.flat_indices(x_bool, free=False)
+        free_ind = pattern.flat_indices(x_bool, free=True)
+        manual_jac[np.ix_(free_ind, flat_ind)] = 1
+
+    flat_to_free_jac = pattern.freeing_jacobian(
+        pattern.empty(valid=True), sparse=False)
+
+    # As a sanity check, make sure there are an appropriate number of
+    # non-zero entries in the Jacobian.
+    num_nonzeros = 0
+    it = np.nditer(flat_to_free_jac, flags=['multi_index'])
+    while not it.finished:
+        # If the true Jacobian is non-zero, make sure we have indicated
+        # dependence in ``flat_indices``.  Note that this allows
+        # ``flat_indices`` to admit dependence where there is none.
+        if it[0] != 0:
+            num_nonzeros += 1
+            testcase.assertTrue(manual_jac[it.multi_index] != 0)
+        it.iternext()
+
+    # Every flat value is depended on by something, and every free value
+    # depends on something.
+    testcase.assertTrue(num_nonzeros >= flat_len)
+    testcase.assertTrue(num_nonzeros >= free_len)
+
 
 def _test_pattern(testcase, pattern, valid_value,
                   check_equal=assert_array_almost_equal,
@@ -29,6 +92,8 @@ def _test_pattern(testcase, pattern, valid_value,
     pattern.flatten(random_val, free=False)
 
     str(pattern)
+
+    pattern.empty_bool(True)
 
     # Make sure to test != using a custom test.
     testcase.assertTrue(pattern == pattern)
@@ -51,8 +116,16 @@ def _test_pattern(testcase, pattern, valid_value,
     json_dict = json.loads(json_string)
     testcase.assertTrue('pattern' in json_dict.keys())
     testcase.assertTrue(json_dict['pattern'] == json_typename)
-    new_pattern = vittles.get_pattern_from_json(json_string)
+    new_pattern = paragami.get_pattern_from_json(json_string)
     testcase.assertTrue(new_pattern == pattern)
+
+    # Test that you cannot covert from a different patter.
+    bad_test_pattern = BadTestPattern()
+    bad_json_string = bad_test_pattern.to_json()
+    testcase.assertFalse(pattern == bad_test_pattern)
+    testcase.assertRaises(
+        ValueError,
+        lambda: pattern.__class__.from_json(bad_json_string))
 
     ############################################
     # Test the freeing and unfreeing Jacobians.
@@ -113,7 +186,7 @@ class TestBasicPatterns(unittest.TestCase):
             valid_value = \
                 valid_value / np.sum(valid_value, axis=-1, keepdims=True)
 
-            pattern = vittles.SimplexArrayPattern(
+            pattern = paragami.SimplexArrayPattern(
                 simplex_size, array_shape)
             _test_pattern(self, pattern, valid_value)
 
@@ -122,65 +195,193 @@ class TestBasicPatterns(unittest.TestCase):
         test_shape_and_size(2, (2, ))
 
         self.assertTrue(
-            vittles.SimplexArrayPattern(3, (2, 3)) !=
-            vittles.SimplexArrayPattern(3, (2, 4)))
+            paragami.SimplexArrayPattern(3, (2, 3)) !=
+            paragami.SimplexArrayPattern(3, (2, 4)))
 
         self.assertTrue(
-            vittles.SimplexArrayPattern(4, (2, 3)) !=
-            vittles.SimplexArrayPattern(3, (2, 3)))
+            paragami.SimplexArrayPattern(4, (2, 3)) !=
+            paragami.SimplexArrayPattern(3, (2, 3)))
+
+        pattern = paragami.SimplexArrayPattern(5, (2, 3))
+        self.assertEqual((2, 3), pattern.array_shape())
+        self.assertEqual(5, pattern.simplex_size())
+        self.assertEqual((2, 3, 5), pattern.shape())
+
+        # Test bad values.
+        with self.assertRaisesRegex(ValueError, 'simplex_size'):
+            paragami.SimplexArrayPattern(1, (2, 3))
+
+        pattern = paragami.SimplexArrayPattern(5, (2, 3))
+        with self.assertRaisesRegex(ValueError, 'wrong shape'):
+            pattern.flatten(np.full((2, 3, 4), 0.2), free=False)
+
+        with self.assertRaisesRegex(ValueError, 'Some values are negative'):
+            bad_folded = np.full((2, 3, 5), 0.2)
+            bad_folded[0, 0, 0] = -0.1
+            bad_folded[0, 0, 1] = 0.5
+            pattern.flatten(bad_folded, free=False)
+
+        with self.assertRaisesRegex(ValueError, 'sum to one'):
+            pattern.flatten(np.full((2, 3, 5), 0.1), free=False)
+
+        with self.assertRaisesRegex(ValueError, 'wrong length'):
+            pattern.fold(np.full(5, 0.2), free=False)
+
+        with self.assertRaisesRegex(ValueError, 'wrong length'):
+            pattern.fold(np.full(5, 0.2), free=True)
+
+        with self.assertRaisesRegex(ValueError, 'sum to one'):
+            pattern.fold(np.full(2 * 3 * 5, 0.1), free=False)
+
+        # Test flat indices.
+        pattern = paragami.SimplexArrayPattern(5, (2, 3))
+        _test_array_flat_indices(self, pattern)
 
     def test_numeric_array_patterns(self):
         for test_shape in [(1, ), (2, ), (2, 3), (2, 3, 4)]:
             valid_value = np.random.random(test_shape)
-            pattern = vittles.NumericArrayPattern(test_shape)
+            pattern = paragami.NumericArrayPattern(test_shape)
             _test_pattern(self, pattern, valid_value)
 
-            pattern = vittles.NumericArrayPattern(test_shape, lb=-1)
+            pattern = paragami.NumericArrayPattern(test_shape, lb=-1)
             _test_pattern(self, pattern, valid_value)
 
-            pattern = vittles.NumericArrayPattern(test_shape, ub=2)
+            pattern = paragami.NumericArrayPattern(test_shape, ub=2)
             _test_pattern(self, pattern, valid_value)
 
-            pattern = vittles.NumericArrayPattern(test_shape, lb=-1, ub=2)
+            pattern = paragami.NumericArrayPattern(test_shape, lb=-1, ub=2)
             _test_pattern(self, pattern, valid_value)
 
-            # Test equality comparisons.
-            self.assertTrue(
-                vittles.NumericArrayPattern((1, 2)) !=
-                vittles.NumericArrayPattern((1, )))
+        # Test scalar subclass.
+        pattern = paragami.NumericScalarPattern()
+        _test_pattern(self, pattern, 2)
+        _test_pattern(self, pattern, [2])
 
-            self.assertTrue(
-                vittles.NumericArrayPattern((1, 2)) !=
-                vittles.NumericArrayPattern((1, 3)))
+        pattern = paragami.NumericScalarPattern(lb=-1)
+        _test_pattern(self, pattern, 2)
 
-            self.assertTrue(
-                vittles.NumericArrayPattern((1, 2), lb=2) !=
-                vittles.NumericArrayPattern((1, 2)))
+        pattern = paragami.NumericScalarPattern(ub=3)
+        _test_pattern(self, pattern, 2)
 
-            self.assertTrue(
-                vittles.NumericArrayPattern((1, 2), lb=2, ub=4) !=
-                vittles.NumericArrayPattern((1, 2), lb=2))
+        pattern = paragami.NumericScalarPattern(lb=-1, ub=3)
+        _test_pattern(self, pattern, 2)
 
-            # Check that singletons work.
-            pattern = vittles.NumericArrayPattern(shape=(1, ))
-            _test_pattern(self, pattern, 1.0)
+        # Test vector subclass.
+        valid_vec = np.random.random(3)
+        pattern = paragami.NumericVectorPattern(length=3)
+        _test_pattern(self, pattern, valid_vec)
+
+        pattern = paragami.NumericVectorPattern(length=3, lb=-1)
+        _test_pattern(self, pattern, valid_vec)
+
+        pattern = paragami.NumericVectorPattern(length=3, ub=3)
+        _test_pattern(self, pattern, valid_vec)
+
+        pattern = paragami.NumericVectorPattern(length=3, lb=-1, ub=3)
+        _test_pattern(self, pattern, valid_vec)
+
+        # Test equality comparisons.
+        self.assertTrue(
+            paragami.NumericArrayPattern((1, 2)) !=
+            paragami.NumericArrayPattern((1, )))
+
+        self.assertTrue(
+            paragami.NumericArrayPattern((1, 2)) !=
+            paragami.NumericArrayPattern((1, 3)))
+
+        self.assertTrue(
+            paragami.NumericArrayPattern((1, 2), lb=2) !=
+            paragami.NumericArrayPattern((1, 2)))
+
+        self.assertTrue(
+            paragami.NumericArrayPattern((1, 2), lb=2, ub=4) !=
+            paragami.NumericArrayPattern((1, 2), lb=2))
+
+        # Check that singletons work.
+        pattern = paragami.NumericArrayPattern(shape=(1, ))
+        _test_pattern(self, pattern, 1.0)
+
+        # Test invalid values.
+        with self.assertRaisesRegex(
+            ValueError, 'ub must strictly exceed lower bound lb'):
+            pattern = paragami.NumericArrayPattern((1, ), lb=1, ub=-1)
+
+        pattern = paragami.NumericArrayPattern((1, ), lb=-1, ub=1)
+        self.assertEqual((-1, 1), pattern.bounds())
+        with self.assertRaisesRegex(ValueError, 'beneath lower bound'):
+            pattern.flatten(-2, free=True)
+        with self.assertRaisesRegex(ValueError, 'above upper bound'):
+            pattern.flatten(2, free=True)
+        with self.assertRaisesRegex(ValueError, 'Wrong size'):
+            pattern.flatten([0, 0], free=True)
+        with self.assertRaisesRegex(ValueError,
+                                    'argument to fold must be a 1d vector'):
+            pattern.fold([[0]], free=True)
+        with self.assertRaisesRegex(ValueError, 'Wrong size for array'):
+            pattern.fold([0, 0], free=True)
+        with self.assertRaisesRegex(ValueError, 'beneath lower bound'):
+            pattern.fold([-2], free=False)
+
+        # Test flat indices.
+        pattern = paragami.NumericArrayPattern((2, 3, 4), lb=-1, ub=1)
+        _test_array_flat_indices(self, pattern)
 
     def test_psdsymmetric_matrix_patterns(self):
         dim = 3
         valid_value = np.eye(dim) * 3 + np.full((dim, dim), 0.1)
-        pattern = vittles.PSDSymmetricMatrixPattern(dim)
+        pattern = paragami.PSDSymmetricMatrixPattern(dim)
         _test_pattern(self, pattern, valid_value)
 
-        pattern = vittles.PSDSymmetricMatrixPattern(dim, diag_lb=0.5)
+        pattern = paragami.PSDSymmetricMatrixPattern(dim, diag_lb=0.5)
         _test_pattern(self, pattern, valid_value)
 
         self.assertTrue(
-            vittles.PSDSymmetricMatrixPattern(3) !=
-            vittles.PSDSymmetricMatrixPattern(4))
+            paragami.PSDSymmetricMatrixPattern(3) !=
+            paragami.PSDSymmetricMatrixPattern(4))
 
         self.assertTrue(
-            vittles.PSDSymmetricMatrixPattern(3, diag_lb=2) !=
-            vittles.PSDSymmetricMatrixPattern(3))
+            paragami.PSDSymmetricMatrixPattern(3, diag_lb=2) !=
+            paragami.PSDSymmetricMatrixPattern(3))
+
+        pattern = paragami.PSDSymmetricMatrixPattern(dim, diag_lb=0.5)
+        self.assertEqual(dim, pattern.size())
+        self.assertEqual((dim, dim), pattern.shape())
+        self.assertEqual(0.5, pattern.diag_lb())
+
+        # Test bad inputs.
+        with self.assertRaisesRegex(ValueError, 'diagonal lower bound'):
+            paragami.PSDSymmetricMatrixPattern(3, diag_lb=-1)
+
+        pattern = paragami.PSDSymmetricMatrixPattern(3, diag_lb=0.5)
+        with self.assertRaisesRegex(ValueError, 'The matrix is not of shape'):
+            pattern.flatten(np.eye(4), free=False)
+
+        with self.assertRaisesRegex(ValueError,
+                                    'Diagonal is less than the lower bound'):
+            pattern.flatten(0.25 * np.eye(3), free=False)
+
+        with self.assertRaisesRegex(ValueError, 'not symmetric'):
+            bad_mat = np.eye(3)
+            bad_mat[0, 1] = 0.1
+            pattern.flatten(bad_mat, free=False)
+
+        flat_val = pattern.flatten(pattern.random(), free=False)
+        with self.assertRaisesRegex(
+                ValueError, 'The argument to fold must be a 1d vector'):
+            pattern.fold(np.atleast_2d(flat_val), free=False)
+
+        flat_val = pattern.flatten(np.eye(3), free=False)
+        with self.assertRaisesRegex(ValueError, 'Wrong length'):
+            pattern.fold(flat_val[-1], free=False)
+
+        flat_val = 0.25 * flat_val
+        with self.assertRaisesRegex(ValueError,
+                                    'Diagonal is less than the lower bound'):
+            pattern.fold(flat_val, free=False)
+
+        # Test flat indices.
+        pattern = paragami.PSDSymmetricMatrixPattern(3, diag_lb=0.5)
+        _test_array_flat_indices(self, pattern)
 
 
 class TestContainerPatterns(unittest.TestCase):
@@ -201,26 +402,29 @@ class TestContainerPatterns(unittest.TestCase):
                     assert_array_almost_equal(dict1[key], dict2[key])
 
         print('dictionary pattern test: one element')
-        dict_pattern = vittles.PatternDict()
+        dict_pattern = paragami.PatternDict()
         dict_pattern['a'] = \
-            vittles.NumericArrayPattern((2, 3, 4), lb=-1, ub=2)
+            paragami.NumericArrayPattern((2, 3, 4), lb=-1, ub=2)
         test_pattern(dict_pattern, dict_pattern.random())
 
         print('dictionary pattern test: two elements')
         dict_pattern['b'] = \
-            vittles.NumericArrayPattern((5, ), lb=-1, ub=10)
+            paragami.NumericArrayPattern((5, ), lb=-1, ub=10)
         test_pattern(dict_pattern, dict_pattern.random())
 
         print('dictionary pattern test: third matrix element')
         dict_pattern['c'] = \
-            vittles.PSDSymmetricMatrixPattern(size=3)
+            paragami.PSDSymmetricMatrixPattern(size=3)
         test_pattern(dict_pattern, dict_pattern.random())
 
         print('dictionary pattern test: sub-dictionary')
-        subdict = vittles.PatternDict()
-        subdict['suba'] = vittles.NumericArrayPattern((2, ))
+        subdict = paragami.PatternDict()
+        subdict['suba'] = paragami.NumericArrayPattern((2, ))
         dict_pattern['d'] = subdict
         test_pattern(dict_pattern, dict_pattern.random())
+
+        # Test flat indices.
+        _test_array_flat_indices(self, dict_pattern)
 
         # Test keys.
         self.assertEqual(list(dict_pattern.keys()), ['a', 'b', 'c', 'd'])
@@ -238,74 +442,124 @@ class TestContainerPatterns(unittest.TestCase):
 
         # Check modifying an existing array element.
         print('dictionary pattern test: modifying array')
-        dict_pattern['a'] = vittles.NumericArrayPattern((2, ), lb=-1, ub=2)
+        dict_pattern['a'] = paragami.NumericArrayPattern((2, ), lb=-1, ub=2)
         test_pattern(dict_pattern, dict_pattern.random())
 
         # Check modifying an existing dictionary element.
         print('dictionary pattern test: modifying sub-dictionary')
         dict_pattern['d'] = \
-            vittles.NumericArrayPattern((4, ), lb=-1, ub=10)
+            paragami.NumericArrayPattern((4, ), lb=-1, ub=10)
         test_pattern(dict_pattern, dict_pattern.random())
 
         # Check locking
         dict_pattern.lock()
 
-        def delete():
+        with self.assertRaises(ValueError):
             del dict_pattern['b']
 
-        def add():
+        with self.assertRaises(ValueError):
             dict_pattern['new'] = \
-                vittles.NumericArrayPattern((4, ))
+                paragami.NumericArrayPattern((4, ))
 
-        def modify():
+        with self.assertRaises(ValueError):
             dict_pattern['a'] = \
-                vittles.NumericArrayPattern((4, ))
+                paragami.NumericArrayPattern((4, ))
 
-        self.assertRaises(ValueError, delete)
-        self.assertRaises(ValueError, add)
-        self.assertRaises(ValueError, modify)
+        # Check invalid values.
+        bad_dict = dict_pattern.random()
+        del bad_dict['a']
+        with self.assertRaisesRegex(ValueError, 'not in folded_val dictionary'):
+            dict_pattern.flatten(bad_dict, free=True)
+
+        bad_dict = dict_pattern.random()
+        bad_dict['a'] = np.array(-10)
+        with self.assertRaisesRegex(ValueError, 'is not valid'):
+            dict_pattern.flatten(bad_dict, free=True)
+
+        free_val = np.random.random(dict_pattern.flat_length(True))
+        with self.assertRaisesRegex(ValueError,
+                                    'argument to fold must be a 1d vector'):
+            dict_pattern.fold(np.atleast_2d(free_val), free=True)
+
+        with self.assertRaisesRegex(ValueError,
+                                    'Wrong size for pattern dictionary'):
+            dict_pattern.fold(free_val[-1], free=True)
 
     def test_pattern_array(self):
-        array_pattern = vittles.NumericArrayPattern(
-            shape=(2, ), lb=-1, ub=10.0)
-        pattern_array = vittles.PatternArray((2, 3), array_pattern)
+        array_pattern = paragami.NumericArrayPattern(
+            shape=(4, ), lb=-1, ub=10.0)
+        pattern_array = paragami.PatternArray((2, 3), array_pattern)
         valid_value = pattern_array.random()
         _test_pattern(self, pattern_array, valid_value)
 
-        matrix_pattern = vittles.PSDSymmetricMatrixPattern(size=2)
-        pattern_array = vittles.PatternArray((2, 3), matrix_pattern)
+        matrix_pattern = paragami.PSDSymmetricMatrixPattern(size=2)
+        pattern_array = paragami.PatternArray((2, 3), matrix_pattern)
         valid_value = pattern_array.random()
         _test_pattern(self, pattern_array, valid_value)
 
-        base_pattern_array = vittles.PatternArray((2, 1), matrix_pattern)
-        pattern_array_array = vittles.PatternArray((1, 3), base_pattern_array)
+        base_pattern_array = paragami.PatternArray((2, 1), matrix_pattern)
+        pattern_array_array = paragami.PatternArray((1, 3), base_pattern_array)
         valid_value = pattern_array_array.random()
         _test_pattern(self, pattern_array_array, valid_value)
 
-        self.assertTrue(
-            vittles.PatternArray((3, 3), matrix_pattern) !=
-            vittles.PatternArray((2, 3), matrix_pattern))
+        # Test flat indices.
+        matrix_pattern = paragami.PSDSymmetricMatrixPattern(size=2)
+        pattern_array = paragami.PatternArray((2, 3), matrix_pattern)
+        _test_array_flat_indices(self, pattern_array)
 
         self.assertTrue(
-            vittles.PatternArray((2, 3), array_pattern) !=
-            vittles.PatternArray((2, 3), matrix_pattern))
+            paragami.PatternArray((3, 3), matrix_pattern) !=
+            paragami.PatternArray((2, 3), matrix_pattern))
+
+        self.assertTrue(
+            paragami.PatternArray((2, 3), array_pattern) !=
+            paragami.PatternArray((2, 3), matrix_pattern))
+
+        pattern_array = paragami.PatternArray((2, 3), array_pattern)
+        self.assertEqual((2, 3), pattern_array.array_shape())
+        self.assertEqual((2, 3, 4), pattern_array.shape())
+        self.assertTrue(array_pattern == pattern_array.base_pattern())
+
+        # Test bad arguments.
+        with self.assertRaisesRegex(NotImplementedError,
+                                    'not numpy.ndarray types'):
+            paragami.PatternArray((2, 3), paragami.PatternDict())
+
+        pattern_array = paragami.PatternArray((2, 3), array_pattern)
+        with self.assertRaisesRegex(ValueError, 'Wrong number of dimensions'):
+            pattern_array.flatten(np.full((2, 3), 0), free=False)
+
+        with self.assertRaisesRegex(ValueError, 'Wrong number of dimensions'):
+            pattern_array.flatten(np.full((2, 3, 4, 5), 0), free=False)
+
+        with self.assertRaisesRegex(ValueError, 'Wrong shape'):
+            pattern_array.flatten(np.full((2, 3, 5), 0), free=False)
+
+        with self.assertRaisesRegex(ValueError, 'Bad value'):
+            pattern_array.flatten(np.full((2, 3, 4), -10), free=False)
+
+        with self.assertRaisesRegex(ValueError, 'must be a 1d vector'):
+            pattern_array.fold(np.full((24, 1), -10), free=False)
+
+        with self.assertRaisesRegex(ValueError, 'Wrong size'):
+            pattern_array.fold(np.full((25, ), -10), free=False)
 
 
 class TestJSONFiles(unittest.TestCase):
     def test_json_files(self):
-        pattern = vittles.PatternDict()
-        pattern['num'] = vittles.NumericArrayPattern((1, 2))
-        pattern['mat'] = vittles.PSDSymmetricMatrixPattern(5)
+        pattern = paragami.PatternDict()
+        pattern['num'] = paragami.NumericArrayPattern((1, 2))
+        pattern['mat'] = paragami.PSDSymmetricMatrixPattern(5)
 
         val_folded = pattern.random()
         extra = np.random.random(5)
 
-        outfile_name = '/tmp/vittles_test_' + str(np.random.randint(1e6))
+        outfile_name = '/tmp/paragami_test_' + str(np.random.randint(1e6))
 
-        vittles.save_folded(outfile_name, val_folded, pattern, extra=extra)
+        paragami.save_folded(outfile_name, val_folded, pattern, extra=extra)
 
         val_folded_loaded, pattern_loaded, data = \
-            vittles.load_folded(outfile_name + '.npz')
+            paragami.load_folded(outfile_name + '.npz')
 
         self.assertTrue(pattern_loaded == pattern)
         self.assertTrue(val_folded.keys() == val_folded_loaded.keys())
@@ -314,9 +568,18 @@ class TestJSONFiles(unittest.TestCase):
                 val_folded[keyname], val_folded_loaded[keyname])
         assert_array_almost_equal(extra, data['extra'])
 
-
-
-
+    def test_register_json_pattern(self):
+        with self.assertRaisesRegex(ValueError, 'already registered'):
+            paragami.pattern_containers.register_pattern_json(
+                paragami.NumericArrayPattern)
+        with self.assertRaisesRegex(
+                KeyError, 'A pattern JSON string must have an entry called'):
+            bad_pattern_json = json.dumps({'hedgehog': 'yes'})
+            paragami.pattern_containers.get_pattern_from_json(bad_pattern_json)
+        with self.assertRaisesRegex(
+                KeyError, 'must be registered'):
+            bad_pattern_json = json.dumps({'pattern': 'nope'})
+            paragami.pattern_containers.get_pattern_from_json(bad_pattern_json)
 
 
 class TestHelperFunctions(unittest.TestCase):
@@ -327,12 +590,12 @@ class TestHelperFunctions(unittest.TestCase):
             return np.log(np.sum(np.exp(mat), axis=axis, keepdims=True))
 
         check_grads(
-            vittles.simplex_patterns._logsumexp,
+            paragami.simplex_patterns.logsumexp,
             modes=['fwd', 'rev'], order=3)(mat, axis)
 
         assert_array_almost_equal(
             logsumexp_simple(mat, axis),
-            vittles.simplex_patterns._logsumexp(mat, axis))
+            paragami.simplex_patterns.logsumexp(mat, axis))
 
     def test_logsumexp(self):
         mat = np.random.random((3, 3, 3))
@@ -340,13 +603,13 @@ class TestHelperFunctions(unittest.TestCase):
 
     def test_pdmatrix_custom_autodiff(self):
         x_vec = np.random.random(6)
-        x_mat = vittles.psdmatrix_patterns._unvectorize_ld_matrix(x_vec)
+        x_mat = paragami.psdmatrix_patterns._unvectorize_ld_matrix(x_vec)
 
         check_grads(
-            vittles.psdmatrix_patterns._vectorize_ld_matrix,
+            paragami.psdmatrix_patterns._vectorize_ld_matrix,
             modes=['fwd', 'rev'], order=3)(x_mat)
         check_grads(
-            vittles.psdmatrix_patterns._unvectorize_ld_matrix,
+            paragami.psdmatrix_patterns._unvectorize_ld_matrix,
             modes=['fwd', 'rev'], order=3)(x_vec)
 
 

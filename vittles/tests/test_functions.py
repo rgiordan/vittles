@@ -8,79 +8,39 @@ from autograd.test_util import check_grads
 
 import itertools
 
-import vittles
+import paragami
 
 
 def get_test_pattern():
-    pattern = vittles.PatternDict()
-    pattern['array'] = vittles.NumericArrayPattern((2, 3, 4), lb=-1, ub=2)
-    pattern['mat'] = vittles.PSDSymmetricMatrixPattern(3)
-    pattern['simplex'] = vittles.SimplexArrayPattern(2, (3, ))
-    subdict = vittles.PatternDict()
-    subdict['array2'] = vittles.NumericArrayPattern((2, ), lb=-3, ub=5)
+    # autograd will pass invalid values, so turn off value checking.
+    pattern = paragami.PatternDict()
+    pattern['array'] = paragami.NumericArrayPattern(
+        (2, 3, 4), lb=-1, ub=2, default_validate=False)
+    pattern['mat'] = paragami.PSDSymmetricMatrixPattern(
+        3, default_validate=False)
+    pattern['simplex'] = paragami.SimplexArrayPattern(
+        2, (3, ), default_validate=False)
+    subdict = paragami.PatternDict()
+    subdict['array2'] = paragami.NumericArrayPattern(
+        (2, ), lb=-3, ub=5, default_validate=False)
     pattern['dict'] = subdict
+
     return pattern
 
 
-class TestPatterns(unittest.TestCase):
-    def _test_functor(self, original_fun, argnums, args, kwargs):
-        argnums_array = np.atleast_1d(argnums)
-        functor = vittles.Functor(original_fun, argnums)
-        functor_args = ()
-        for i in argnums_array:
-            functor_args += (args[i], )
-
-        # Check that you have to set the cache.
-        with self.assertRaises(ValueError):
-            functor(*functor_args)
-
-        functor.cache_args(*args, **kwargs)
-        assert_array_almost_equal(
-            original_fun(*args, **kwargs),
-            functor(*functor_args))
-
-        # Check you can clear the cache.
-        functor.clear_cached_args()
-        with self.assertRaises(ValueError):
-            functor(*functor_args)
-
-        # Check that the argument length must be correct.
-        functor.cache_args(*args, **kwargs)
-        bad_functor_args = functor_args + (2, )
-        with self.assertRaises(ValueError):
-            functor(*bad_functor_args)
+def assert_test_dict_equal(d1, d2):
+    """Assert that dictionaries corresponding to test pattern are equal.
+    """
+    for k in ['array', 'mat', 'simplex']:
+        assert_array_almost_equal(d1[k], d2[k])
+    assert_array_almost_equal(d1['dict']['array2'], d2['dict']['array2'])
 
 
-    def test_functors(self):
-        x = 1
-        y = 2
-        z = -3
-        zz = -4
-
-        def testfun(x):
-            return x
-        self._test_functor(testfun, 0, (x, ), {})
-
-        def testfun(x, y):
-            return x + y
-        for argnums in [0, 1, [0, 1]]:
-            self._test_functor(testfun, argnums, (x, y), {})
-
-        def testfun(x, y, z=3):
-            return x + y + z
-        for argnums in [0, 1, [0, 1]]:
-            self._test_functor(testfun, argnums, (x, y), {'z': 3})
-
-        def testfun(x, y, z=3, zz=4):
-            return x + y + z + zz
-        for argnums in [0, 1, [0, 1]]:
-            self._test_functor(testfun, argnums, (x, y), {'z': 3, 'zz': 4})
-
-
+class TestFlatteningAndFolding(unittest.TestCase):
     def _test_flatten_function(self, original_fun, patterns, free, argnums,
                                args, flat_args, kwargs):
 
-        fun_flat = vittles.FlattenedFunction(
+        fun_flat = paragami.FlattenFunctionInput(
             original_fun, patterns, free, argnums)
 
         # Sanity check that the flat_args were set correctly.
@@ -99,6 +59,8 @@ class TestPatterns(unittest.TestCase):
             original_fun(*args, **kwargs),
             fun_flat(*flat_args, **kwargs))
 
+        # Check that the string method works.
+        str(fun_flat)
 
     def test_flatten_function(self):
         pattern = get_test_pattern()
@@ -188,6 +150,74 @@ class TestPatterns(unittest.TestCase):
                 [b_free, a_free], [2, 0],
                 (a, z, b, x, ), (a_flat, z, b_flat, x, ), {'y': 5})
 
+        # Test bad inits
+        with self.assertRaises(ValueError):
+            fun_flat = paragami.FlattenFunctionInput(
+                testfun1, [[ pattern['mat'] ]], True, 0)
+
+        with self.assertRaises(ValueError):
+            fun_flat = paragami.FlattenFunctionInput(
+                testfun1, pattern['mat'], True, [[0]])
+
+        with self.assertRaises(ValueError):
+            fun_flat = paragami.FlattenFunctionInput(
+                testfun1, pattern['mat'], True, [0, 0])
+
+        with self.assertRaises(ValueError):
+            fun_flat = paragami.FlattenFunctionInput(
+                testfun1, pattern['mat'], True, [0, 1])
+
+
+    def test_fold_function_output(self):
+        pattern = get_test_pattern()
+        param_val = pattern.random()
+        param_flat = pattern.flatten(param_val, free=False)
+        param_free = pattern.flatten(param_val, free=True)
+
+        def get_param(a, b=0.1):
+            param_val = pattern.empty(valid=False)
+            param_val['array'][:] = a + b
+            param_val['mat'] = \
+                a * np.eye(param_val['mat'].shape[0]) + b
+            param_val['simplex'] = np.full(param_val['simplex'].shape, 0.5)
+            param_val['dict']['array2'][:] = a + b
+
+            return param_val
+
+        for free in [False, True]:
+            def get_flat_param(a, b=0.1):
+                return pattern.flatten(get_param(a, b=b), free=free)
+
+            get_folded_param = paragami.FoldFunctionOutput(
+                get_flat_param, pattern=pattern, free=free)
+            a = 0.1
+            b = 0.2
+            assert_test_dict_equal(
+                get_param(a, b=b), get_folded_param(a, b=b))
+
+    def test_flatten_and_fold(self):
+        pattern = get_test_pattern()
+        pattern_val = pattern.random()
+        free_val = pattern.flatten(pattern_val, free=True)
+
+        def operate_on_free(free_val, a, b=2):
+            return free_val * a + b
+
+        a = 2
+        b = 3
+
+        folded_fun = paragami.FoldFunctionInputAndOutput(
+            original_fun=operate_on_free,
+            input_patterns=pattern,
+            input_free=True,
+            input_argnums=0,
+            output_pattern=pattern,
+            output_free=True)
+
+        pattern_out = folded_fun(pattern_val, a, b=b)
+        pattern_out_test = pattern.fold(
+            operate_on_free(free_val, a, b=b), free=True)
+        assert_test_dict_equal(pattern_out_test, pattern_out)
 
     def test_autograd(self):
         pattern = get_test_pattern()
@@ -202,7 +232,7 @@ class TestPatterns(unittest.TestCase):
                 np.mean(param_val['mat'] ** 2)
 
         for free in [True, False]:
-            tf1_flat = vittles.FlattenedFunction(tf1, pattern, free)
+            tf1_flat = paragami.FlattenFunctionInput(tf1, pattern, free)
             param_val_flat = pattern.flatten(param_val, free=free)
             check_grads(
                 tf1_flat, modes=['rev', 'fwd'], order=2)(param_val_flat)

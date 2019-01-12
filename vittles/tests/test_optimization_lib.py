@@ -3,9 +3,10 @@
 import autograd
 import autograd.numpy as np
 from autograd.test_util import check_grads
+import copy
 import itertools
 from numpy.testing import assert_array_almost_equal
-import vittles
+import paragami
 import scipy as sp
 from test_utils import QuadraticModel, captured_output
 import unittest
@@ -16,12 +17,12 @@ class TestPreconditionedFunction(unittest.TestCase):
         model = QuadraticModel(dim=3)
 
         # Define a function of theta alone.
-        f = vittles.Functor(model.get_objective, argnums=0)
-        f.cache_args(None, model.lam)
+        lam0 = copy.deepcopy(model.lam)
+        f = lambda x: model.get_objective(x, lam0)
         f_grad = autograd.grad(f)
         f_hessian = autograd.hessian(f)
 
-        f_c = vittles.PreconditionedFunction(f)
+        f_c = paragami.PreconditionedFunction(f)
         f_c_grad = autograd.grad(f_c)
         f_c_hessian = autograd.hessian(f_c)
 
@@ -60,7 +61,7 @@ class TestPreconditionedFunction(unittest.TestCase):
         for ev_min in [None, 0.01]:
             for ev_max in [None, 10.0]:
                 h_inv_sqrt, h_sqrt, h = \
-                    vittles.optimization_lib._get_sym_matrix_inv_sqrt(
+                    paragami.optimization_lib._get_sym_matrix_inv_sqrt(
                         hess, ev_min=ev_min, ev_max=ev_max)
 
                 f_c.set_preconditioner_with_hessian(
@@ -115,7 +116,7 @@ class TestPreconditionedFunction(unittest.TestCase):
         for test_ev_min in [None, ev0]:
             for test_ev_max in [None, ev1]:
                 h_inv_sqrt, h_sqrt, h = \
-                    vittles.optimization_lib._get_sym_matrix_inv_sqrt(
+                    paragami.optimization_lib._get_sym_matrix_inv_sqrt(
                         mat, test_ev_min, test_ev_max)
                 assert_array_almost_equal(id_mat, h_inv_sqrt @ h_sqrt)
                 assert_array_almost_equal(
@@ -146,7 +147,7 @@ class TestOptimizationObjective(unittest.TestCase):
             return np.sum(x ** 4)
 
         x0 = np.random.random(5)
-        obj = vittles.OptimizationObjective(
+        obj = paragami.OptimizationObjective(
             objective_fun, print_every=0)
         assert_array_almost_equal(objective_fun(x0), obj.f(x0))
         assert_array_almost_equal(
