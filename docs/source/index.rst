@@ -33,4 +33,5 @@ For additional background and motivation, see the following papers:
 
    installation
    api/api
+   example_notebooks/examples
    release-history
