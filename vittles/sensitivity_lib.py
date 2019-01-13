@@ -670,11 +670,11 @@ class DerivativeTerm:
             of terms :math:`d\\eta^{i + 1} / d\\epsilon^{i + 1}`.
         prefactor:
             The constant multiple in front of this term.
-        eval_eta_derivs:
-            A vector of functions to evaluate :math:`d\\eta^i / d\\epsilon^i`.
-            The functions should take arguments (eta0, eps0, deps) and the
-            i-th entry should evaluate
-            :math:`d\\eta^i / d\\epsilon^i (d \\epsilon^i) |_{\\eta_0, \\epsilon_0}`.
+        # eval_eta_derivs:
+        #     A vector of functions to evaluate :math:`d\\eta^i / d\\epsilon^i`.
+        #     The functions should take arguments (eta0, eps0, deps) and the
+        #     i-th entry should evaluate
+        #     :math:`d\\eta^i / d\\epsilon^i (d \\epsilon^i) |_{\\eta_0, \\epsilon_0}`.
         eval_g_derivs:
             A list of lists of g jacobian vector product functions.
             The array should be such that
@@ -685,7 +685,7 @@ class DerivativeTerm:
         self.eps_order = eps_order
         self.eta_orders = eta_orders
         self.prefactor = prefactor
-        self._eval_eta_derivs = eval_eta_derivs
+        #self._eval_eta_derivs = eval_eta_derivs
         self._eval_g_derivs = eval_g_derivs
 
         # Derived quantities.
@@ -710,7 +710,7 @@ class DerivativeTerm:
         for eta_order in self.eta_orders:
             assert eta_order >= 0
             assert isinstance(eta_order, int)
-        assert len(self._eval_eta_derivs) >= self._order - 1
+        # assert len(self._eval_eta_derivs) >= self._order - 1
         assert len(eval_g_derivs) > len(self.eta_orders)
         for eta_deriv_list in eval_g_derivs:
             assert len(eta_deriv_list) > self.eps_order
@@ -719,14 +719,32 @@ class DerivativeTerm:
         return 'Order: {}\t{} * eta{} * eps[{}]'.format(
             self._order, self.prefactor, self.eta_orders, self.eps_order)
 
-    def evaluate(self, eta0, eps0, deps):
+    def evaluate(self, eta0, eps0, deps, eta_derivs):
+        """Evaluate the DerivativeTerm.
+
+        Parameters
+        ----------------------
+        eta0, eps0 : `numpy.ndarray`
+            Where to evaluate the derivative.
+        deps : `numpy.ndarray`
+            The direction in which to evaluate the derivative.
+        eta_derivs : `list` of `numpy.ndarray`
+            A list where ``eta_derivs[i]`` contains
+            :math:`d\\eta^i / d\\epsilon^i \\Delta \\epsilon^i`.
+        """
+
+        # TODO: this check is best done elsewhere
+        if not len(eta_derivs) >= self._order - 1:
+            raise ValueError('Not enough derivatives in ``eta_derivs``.')
+
         # First eta arguments, then epsilons.
         vec_args = []
 
         for i in range(len(self.eta_orders)):
             eta_order = self.eta_orders[i]
             if eta_order > 0:
-                vec = self._eval_eta_derivs[i](eta0, eps0, deps)
+                # vec = self._eval_eta_derivs[i](eta0, eps0, deps)
+                vec = eval_eta_derivs[i]
                 for j in range(eta_order):
                     vec_args.append(vec)
 
@@ -735,10 +753,10 @@ class DerivativeTerm:
 
         return self.prefactor * self.eval_g_deriv(eta0, eps0, *vec_args)
 
-    def differentiate(self, eval_next_eta_deriv):
+    def differentiate(self):
         derivative_terms = []
-        new_eval_eta_derivs = deepcopy(self._eval_eta_derivs)
-        new_eval_eta_derivs.append(eval_next_eta_deriv)
+        # new_eval_eta_derivs = deepcopy(self._eval_eta_derivs)
+        #new_eval_eta_derivs.append(eval_next_eta_deriv)
 
         old_eta_orders = deepcopy(self.eta_orders)
         old_eta_orders.append(0)
@@ -749,7 +767,7 @@ class DerivativeTerm:
                 eps_order=self.eps_order + 1,
                 eta_orders=deepcopy(old_eta_orders),
                 prefactor=self.prefactor,
-                eval_eta_derivs=new_eval_eta_derivs,
+                # eval_eta_derivs=new_eval_eta_derivs,
                 eval_g_derivs=self._eval_g_derivs))
 
         # dG / deta.
@@ -760,7 +778,7 @@ class DerivativeTerm:
                 eps_order=self.eps_order,
                 eta_orders=new_eta_orders,
                 prefactor=self.prefactor,
-                eval_eta_derivs=new_eval_eta_derivs,
+                # eval_eta_derivs=new_eval_eta_derivs,
                 eval_g_derivs=self._eval_g_derivs))
 
         # Derivatives of each d^{i}eta / deps^i term.
@@ -775,7 +793,7 @@ class DerivativeTerm:
                         eps_order=self.eps_order,
                         eta_orders=new_eta_orders,
                         prefactor=self.prefactor * eta_order,
-                        eval_eta_derivs=new_eval_eta_derivs,
+                        # eval_eta_derivs=new_eval_eta_derivs,
                         eval_g_derivs=self._eval_g_derivs))
 
         return derivative_terms
@@ -794,7 +812,7 @@ class DerivativeTerm:
             eps_order=self.eps_order,
             eta_orders=self.eta_orders,
             prefactor=self.prefactor + term.prefactor,
-            eval_eta_derivs=self._eval_eta_derivs,
+            # eval_eta_derivs=self._eval_eta_derivs,
             eval_g_derivs=self._eval_g_derivs)
 
 
@@ -859,40 +877,44 @@ def _consolidate_terms(dterms):
 
     return consolidated_dterms
 
-
-def evaluate_terms(dterms, eta0, eps0, deps, include_highest_eta_order=True):
-    """
-    Evaluate a list of derivative terms.
-
-    Parameters
-    ---------------
-    dterms:
-        A list of derivative terms.
-    eta0:
-        The value of the first argument at which the derivative is evaluated.
-    eps0:
-        The value of the second argument at which the derivative is evaluated.
-    deps: numpy array
-        The change in epsilon by which to multiply the Jacobians.
-    include_highest_eta_order: boolean
-        If true, include the term with
-        ``d^k eta / deps^k``, where ``k == order``.  The main use of these
-        DerivativeTerms at the time of writing is precisely to evaluate this
-        term using the other terms, and this can be accomplished by setting
-        include_highest_eta_order to False.
-
-    Returns
-    ---------------
-        The sum of the evaluated DerivativeTerms.
-    """
-    vec = None
-    for term in dterms:
-        if include_highest_eta_order or (term.eta_orders[-1] == 0):
-            if vec is None:
-                vec = term.evaluate(eta0, eps0, deps)
-            else:
-                vec += term.evaluate(eta0, eps0, deps)
-    return vec
+#
+# def evaluate_terms(dterms, eta0, eps0, deps, eta_derivs,
+#                    include_highest_eta_order=True):
+#     """
+#     Evaluate a list of derivative terms.
+#
+#     Parameters
+#     ---------------
+#     dterms : `list` of `DerivativeTerm`
+#         A list of derivative terms.
+#     eta0 : `numpy.ndarray`
+#         The value of the first argument at which the derivative is evaluated.
+#     eps0 : `numpy.ndarray`
+#         The value of the second argument at which the derivative is evaluated.
+#     deps : `numpy.ndarray`
+#         The change in epsilon by which to multiply the Jacobians.
+#     eta_derivs : `list` of `numpy.ndarray`
+#         A list where ``eta_derivs[i]`` contains
+#         :math:`d\\eta^i / d\\epsilon^i \\Delta \\epsilon^i`.
+#     include_highest_eta_order : `bool`
+#         If true, include the term with
+#         ``d^k eta / deps^k``, where ``k == order``.  The main use of these
+#         DerivativeTerms at the time of writing is precisely to evaluate this
+#         term using the other terms, and this can be accomplished by setting
+#         include_highest_eta_order to False.
+#
+#     Returns
+#     ---------------
+#         The sum of the evaluated DerivativeTerms.
+#     """
+#     vec = None
+#     for term in dterms:
+#         if include_highest_eta_order or (term.eta_orders[-1] == 0):
+#             if vec is None:
+#                 vec = term.evaluate(eta0, eps0, deps, eta_derivs)
+#             else:
+#                 vec += term.evaluate(eta0, eps0, deps, eta_derivs)
+#     return vec
 
 
 # Get the terms to start a Taylor expansion.
@@ -916,44 +938,56 @@ def _get_taylor_base_terms(eval_g_derivs):
 # Given a collection of dterms (formed either with _get_taylor_base_terms
 # or derivatives), evaluate the implied dketa_depsk.
 #
-def evaluate_dketa_depsk(hess_solver, dterms, eta0, eps0, deps):
-    """Evaluate the kth derivative of an optimum wrt a hyperparameter.
-
-    Parameters
-    ----------------------
-    hess_solver : `HessianSolver`
-        A class to solve :math:`H^{-1} v`
-    dterms : list of `DerivativeTerm`
-        The terms contributing to the derivative.
-    eta0 : `numpy.ndarray` (N, )
-        The value of the optimization parameter.
-    eps0 : `numpy.ndarray` (M, )
-        The value of the hyperparameter.
-    deps : `numpy.ndarray` (M, )
-        The change in epsilon by which to multiply the Jacobians.
-    """
-    vec = evaluate_terms(
-        dterms, eta0, eps0, deps, include_highest_eta_order=False)
-    assert vec is not None
-    return -1 * hess_solver.solve(vec)
-
-
-# Calculate the derivative of an array of DerivativeTerms.
+# Is this necessary?
+# def evaluate_dketa_depsk(hess_solver, dterms, eta0, eps0, deps,
+#                          eta_derivs):
+#     """Evaluate the kth derivative of an optimum wrt a hyperparameter.
 #
-# Args:
-#   - hess0: The Hessian of the objective wrt the first argument.
-#   - dterms: An array of DerivativeTerms.
-#
-# Returns:
-#   An array of the derivatives of dterms with respect to the second argument.
-def differentiate_terms(hess_solver, dterms):
-    def eval_next_eta_deriv(eta, eps, deps):
-        return evaluate_dketa_depsk(hess_solver, dterms, eta, eps, deps)
+#     Parameters
+#     ----------------------
+#     hess_solver : `HessianSolver`
+#         A class to solve :math:`H^{-1} v`
+#     dterms : list of `DerivativeTerm`
+#         The terms contributing to the derivative.
+#     eta0 : `numpy.ndarray` (N, )
+#         The value of the optimization parameter.
+#     eps0 : `numpy.ndarray` (M, )
+#         The value of the hyperparameter.
+#     deps : `numpy.ndarray` (M, )
+#         The change in epsilon by which to multiply the Jacobians.
+#     eta_derivs : `list` of `numpy.ndarray`
+#         A list where ``eta_derivs[i]`` contains
+#         :math:`d\\eta^i / d\\epsilon^i \\Delta \\epsilon^i`.
+#     """
+#     vec = evaluate_terms(
+#         dterms, eta0, eps0, deps, eta_derivs,
+#         include_highest_eta_order=False)
+#     assert vec is not None
+#     return -1 * hess_solver.solve(vec)
 
-    dterms_derivs = []
-    for term in dterms:
-        dterms_derivs += term.differentiate(eval_next_eta_deriv)
-    return _consolidate_terms(dterms_derivs)
+
+# def differentiate_terms(hess_solver, dterms):
+#     """
+#     Calculate the derivative of an array of DerivativeTerms.
+#
+#     Parameters
+#     ------------------
+#     hess_solver : `HessianSolver`
+#         The Hessian of the objective wrt the first argument.
+#     dterms : `list` of `DerivativeTerms`
+#         The terms to be differentiated
+#
+#     Returns:
+#     dterms_derivs : `list` of `DerivativeTerms`
+#       A list of the derivatives of ``dterms``.
+#     """
+#     # def eval_next_eta_deriv(eta, eps, deps):
+#     #     return evaluate_dketa_depsk(hess_solver, dterms, eta, eps, deps)
+#
+#     dterms_derivs = []
+#     for term in dterms:
+#         dterms_derivs += term.differentiate()
+#     return _consolidate_terms(dterms_derivs)
 
 
 class ParametricSensitivityTaylorExpansion(object):
@@ -965,13 +999,6 @@ class ParametricSensitivityTaylorExpansion(object):
     differentation.
 
     .. note:: This class is experimental and should be used with caution.
-
-    Methods
-    --------------
-    evaluate_dkinput_dhyperk:
-        Evaluate the k-th derivative.
-    evaluate_taylor_series:
-        Evaluate the Taylor series.
     """
     def __init__(self, objective_function,
                  input_val0, hyper_val0, order,
@@ -1054,24 +1081,29 @@ class ParametricSensitivityTaylorExpansion(object):
         self.hess_solver = HessianSolver(self._hess0, 'factorization')
 
     # Get a function returning the next derivative from the Taylor terms dterms.
-    def _get_dkinput_dhyperk_from_terms(self, dterms):
-        def dkinput_dhyperk(input_val, hyper_val, dhyper, tolerance=1e-8):
-            if tolerance is not None:
-                # Make sure you're evaluating sensitivity at the base parameters.
-                assert np.max(np.abs(input_val - self._input_val0)) <= tolerance
-                assert np.max(np.abs(hyper_val - self._hyper_val0)) <= tolerance
-            return evaluate_dketa_depsk(
-                self.hess_solver, dterms,
-                self._input_val0, self._hyper_val0, dhyper)
-        return dkinput_dhyperk
+    # def _get_dkinput_dhyperk_from_terms(self, dterms):
+    #     def dkinput_dhyperk(input_val, hyper_val, dhyper, eta_derivs,
+    #                         tolerance=1e-8):
+    #         if tolerance is not None:
+    #             # Make sure you're evaluating sensitivity at the base parameters.
+    #             assert np.max(np.abs(input_val - self._input_val0)) <= tolerance
+    #             assert np.max(np.abs(hyper_val - self._hyper_val0)) <= tolerance
+    #         return evaluate_dketa_depsk(
+    #             self.hess_solver, dterms,
+    #             self._input_val0, self._hyper_val0, dhyper,
+    #             eta_derivs)
+    #     return dkinput_dhyperk
 
-    def _differentiate_terms(self, dterms, eval_next_eta_deriv):
+    def _differentiate_terms(self, dterms):
         dterms_derivs = []
         for term in dterms:
-            dterms_derivs += term.differentiate(eval_next_eta_deriv)
+            dterms_derivs += term.differentiate()
         return _consolidate_terms(dterms_derivs)
 
     def _set_order(self, order):
+        """Generate the matrix of g partial derivatives and differentiate
+        the Taylor series up to the required order.
+        """
         self._order = order
 
         # You need one more gradient derivative than the order of the Taylor
@@ -1083,29 +1115,31 @@ class ParametricSensitivityTaylorExpansion(object):
             [ _get_taylor_base_terms(self._eval_g_derivs) ]
         self._dkinput_dhyperk_list = []
         for k in range(self._order - 1):
-            next_dkinput_dhyperk = \
-                self._get_dkinput_dhyperk_from_terms(
-                    self._taylor_terms_list[k])
+            # next_dkinput_dhyperk = \
+            #     self._get_dkinput_dhyperk_from_terms(
+            #         self._taylor_terms_list[k])
             next_taylor_terms = \
                 self._differentiate_terms(
                     self._taylor_terms_list[k], next_dkinput_dhyperk)
-            self._dkinput_dhyperk_list.append(next_dkinput_dhyperk)
+            # self._dkinput_dhyperk_list.append(next_dkinput_dhyperk)
             self._taylor_terms_list.append(next_taylor_terms)
 
-        self._dkinput_dhyperk_list.append(
-            self._get_dkinput_dhyperk_from_terms(
-                self._taylor_terms_list[self._order - 1]))
+        # self._dkinput_dhyperk_list.append(
+        #     self._get_dkinput_dhyperk_from_terms(
+        #         self._taylor_terms_list[self._order - 1]))
 
-    def evaluate_dkinput_dhyperk(self, dhyper, k):
+    def evaluate_dkinput_dhyperk(self, dhyper, input_derivs, k):
         """
         Evaluate the derivative d^k input / d hyper^k in the direction dhyper.
 
         Parameters
         --------------
-        dhyper: `numpy.ndarray` (N, )
+        dhyper : `numpy.ndarray` (N, )
             The direction ``new_hyper_val - hyper_val0`` in which to evaluate
             the directional derivative.
-        k: `int`
+        input_derivs : `list` of `numpy.ndarray`
+            A list of previous dkinput_dhyperk up to order k - 1.
+        k : `int`
             The order of the derivative.
 
         Returns
@@ -1118,8 +1152,75 @@ class ParametricSensitivityTaylorExpansion(object):
             raise ValueError(
                 'k must be no greater than the declared order={}'.format(
                     self._order))
-        deriv_fun = self._dkinput_dhyperk_list[k - 1]
-        return deriv_fun(self._input_val0, self._hyper_val0, dhyper)
+        if len(eta_derivs) < k - 1:
+            raise ValueError('Not enough eta_derivs provided.')
+        # deriv_fun = self._dkinput_dhyperk_list[k - 1]
+        # return deriv_fun(self._input_val0, self._hyper_val0, dhyper)
+        vec = np.zeros_like(self._input_val0)
+        for term in dterms:
+            # Exclude the highest order eta derivative -- this what
+            # we are trying to calculate.
+            if (term.eta_orders[-1] == 0):
+                # if vec is None:
+                vec += \
+                    term.evaluate(
+                        eta0=self._input_val0,
+                        eps0=self._hyper_val0,
+                        deps=dhyper,
+                        eta_derivs=input_derivs)
+                # else:
+                # vec += term.evaluate(eta0, eps0, deps, eta_derivs)
+        # return vec
+        # vec = evaluate_terms(
+        #     self._taylor_terms_list[k],
+        #     eta0=self._input_val0,
+        #     eps0=self._hyper_val0,
+        #     deps=dhyper,
+        #     eta_derivs=eta_derivs,
+        #     include_highest_eta_order=False)
+        # assert vec is not None
+        return -1 * hess_solver.solve(vec)
+
+
+    def evaluate_input_derivs(self, dhyper, max_order):
+        """Return a list of the derivatives dkinput / dhyperk dhyper^k
+        """
+        input_derivs = []
+        for k in range(1, max_order):
+            dinputk_dhyperk = input_derivs.append(
+                self.evaluate_dkinput_dhyperk(
+                    dhyper=dhyper,
+                    input_derivs=input_derivs,
+                    k=k)
+                input_derivs.append(dinputk_dhyperk)
+        return input_derivs
+
+
+    def evaluate_taylor_series_terms(self, new_hyper_val, max_order=None):
+        """Return the terms in a Taylor series approximation.
+        """
+        if max_order is None:
+            max_order = self._order
+        if max_order <= 0:
+            raise ValueError('max_order must be greater than zero.')
+        if max_order > self._order:
+            raise ValueError(
+                'max_order must be no greater than the order={}'.format(
+                    self._order))
+
+        if add_offset:
+            dinput_terms = [self._input_val0]
+        else:
+            dinput_terms = [np.zeros_like(self._input_val0)]
+        dhyper = new_hyper_val - self._hyper_val0
+        input_derivs = \
+            self.evaluate_input_derivs(dhyper, max_order=max_order)
+
+        for k in range(1, max_order + 1):
+            dinput_terms.append(input_derivs[k] / float(factorial(k)
+
+        return dinput_terms
+
 
     def evaluate_taylor_series(self, new_hyper_val,
                                add_offset=True, max_order=None,
@@ -1152,29 +1253,13 @@ class ParametricSensitivityTaylorExpansion(object):
             shape ``max_order + 1, len(input_val)`` is returned containing
             the terms of the Taylor series approximation.
         """
-        if max_order is None:
-            max_order = self._order
-        if max_order <= 0:
-            raise ValueError('max_order must be greater than zero.')
-        if max_order > self._order:
-            raise ValueError(
-                'max_order must be no greater than the declared order={}'.format(
-                    self._order))
 
-        if add_offset:
-            dinput = [self._input_val0]
-        else:
-            dinput = [0]
-        dhyper = new_hyper_val - self._hyper_val0
-        for k in range(1, max_order + 1):
-            dinput.append(
-                self.evaluate_dkinput_dhyperk(dhyper, k) / float(factorial(k)))
+        dinput_terms = self.evaluate_taylor_series_terms(
+            new_hyper_val=new_hyper_val,
+            add_offset=add_offset,
+            max_order=max_order)
+        return np.sum(dinput_terms, axis=0)
 
-        dinput = np.array(dinput)
-        if sum_terms:
-            return np.sum(dinput, axis=0)
-        else:
-            return dinput
 
     def print_terms(self, k=None):
         """
