@@ -734,7 +734,8 @@ class DerivativeTerm:
         """
 
         # TODO: this check is best done elsewhere
-        if not len(eta_derivs) >= self._order - 1:
+        if len(eta_derivs) < self._order - 1:
+            print('>>>>>>>>>.', eta_derivs, self._order)
             raise ValueError('Not enough derivatives in ``eta_derivs``.')
 
         # First eta arguments, then epsilons.
@@ -1113,14 +1114,13 @@ class ParametricSensitivityTaylorExpansion(object):
 
         self._taylor_terms_list = \
             [ _get_taylor_base_terms(self._eval_g_derivs) ]
-        self._dkinput_dhyperk_list = []
-        for k in range(self._order - 1):
+        # self._dkinput_dhyperk_list = []
+        for k in range(1, self._order):
             # next_dkinput_dhyperk = \
             #     self._get_dkinput_dhyperk_from_terms(
             #         self._taylor_terms_list[k])
             next_taylor_terms = \
-                self._differentiate_terms(
-                    self._taylor_terms_list[k], next_dkinput_dhyperk)
+                self._differentiate_terms(self._taylor_terms_list[k - 1])
             # self._dkinput_dhyperk_list.append(next_dkinput_dhyperk)
             self._taylor_terms_list.append(next_taylor_terms)
 
@@ -1128,7 +1128,7 @@ class ParametricSensitivityTaylorExpansion(object):
         #     self._get_dkinput_dhyperk_from_terms(
         #         self._taylor_terms_list[self._order - 1]))
 
-    def evaluate_dkinput_dhyperk(self, dhyper, input_derivs, k):
+    def _evaluate_dkinput_dhyperk(self, dhyper, input_derivs, k):
         """
         Evaluate the derivative d^k input / d hyper^k in the direction dhyper.
 
@@ -1152,12 +1152,14 @@ class ParametricSensitivityTaylorExpansion(object):
             raise ValueError(
                 'k must be no greater than the declared order={}'.format(
                     self._order))
-        if len(eta_derivs) < k - 1:
+        if len(input_derivs) < k - 1:
             raise ValueError('Not enough eta_derivs provided.')
         # deriv_fun = self._dkinput_dhyperk_list[k - 1]
         # return deriv_fun(self._input_val0, self._hyper_val0, dhyper)
         vec = np.zeros_like(self._input_val0)
-        for term in dterms:
+        print('----------Evaluating term ', k)
+        for term in self._taylor_terms_list[k - 1]:
+            print('Evaluating term ', term, term.eta_orders)
             # Exclude the highest order eta derivative -- this what
             # we are trying to calculate.
             if (term.eta_orders[-1] == 0):
@@ -1179,16 +1181,18 @@ class ParametricSensitivityTaylorExpansion(object):
         #     eta_derivs=eta_derivs,
         #     include_highest_eta_order=False)
         # assert vec is not None
-        return -1 * hess_solver.solve(vec)
+        return -1 * self.hess_solver.solve(vec)
 
 
-    def evaluate_input_derivs(self, dhyper, max_order):
+    def evaluate_input_derivs(self, dhyper, max_order=None):
         """Return a list of the derivatives dkinput / dhyperk dhyper^k
         """
+        if max_order is None:
+            max_order = self._order
         input_derivs = []
-        for k in range(1, max_order):
+        for k in range(1, max_order + 1):
             dinputk_dhyperk = \
-                self.evaluate_dkinput_dhyperk(
+                self._evaluate_dkinput_dhyperk(
                     dhyper=dhyper,
                     input_derivs=input_derivs,
                     k=k)
@@ -1196,7 +1200,8 @@ class ParametricSensitivityTaylorExpansion(object):
         return input_derivs
 
 
-    def evaluate_taylor_series_terms(self, new_hyper_val, max_order=None):
+    def evaluate_taylor_series_terms(self, new_hyper_val, add_offset=True,
+                                     max_order=None):
         """Return the terms in a Taylor series approximation.
         """
         if max_order is None:
@@ -1217,7 +1222,7 @@ class ParametricSensitivityTaylorExpansion(object):
             self.evaluate_input_derivs(dhyper, max_order=max_order)
 
         for k in range(1, max_order + 1):
-            dinput_terms.append(input_derivs[k] / float(factorial(k)))
+            dinput_terms.append(input_derivs[k - 1] / float(factorial(k)))
 
         return dinput_terms
 
