@@ -659,7 +659,7 @@ class DerivativeTerm:
         Return the sum of this term and another term.
     """
     def __init__(self, eps_order, eta_orders, prefactor,
-                 eval_eta_derivs, eval_g_derivs):
+                 eval_g_derivs):
         """
         Parameters
         -------------
@@ -744,7 +744,7 @@ class DerivativeTerm:
             eta_order = self.eta_orders[i]
             if eta_order > 0:
                 # vec = self._eval_eta_derivs[i](eta0, eps0, deps)
-                vec = eval_eta_derivs[i]
+                vec = eta_derivs[i]
                 for j in range(eta_order):
                     vec_args.append(vec)
 
@@ -924,13 +924,13 @@ def _get_taylor_base_terms(eval_g_derivs):
             eps_order=1,
             eta_orders=[0],
             prefactor=1.0,
-            eval_eta_derivs=[],
+            #eval_eta_derivs=[],
             eval_g_derivs=eval_g_derivs),
         DerivativeTerm(
             eps_order=0,
             eta_orders=[1],
             prefactor=1.0,
-            eval_eta_derivs=[],
+            #eval_eta_derivs=[],
             eval_g_derivs=eval_g_derivs) ]
     return dterms1
 
@@ -1187,12 +1187,12 @@ class ParametricSensitivityTaylorExpansion(object):
         """
         input_derivs = []
         for k in range(1, max_order):
-            dinputk_dhyperk = input_derivs.append(
+            dinputk_dhyperk = \
                 self.evaluate_dkinput_dhyperk(
                     dhyper=dhyper,
                     input_derivs=input_derivs,
                     k=k)
-                input_derivs.append(dinputk_dhyperk)
+            input_derivs.append(dinputk_dhyperk)
         return input_derivs
 
 
@@ -1217,7 +1217,7 @@ class ParametricSensitivityTaylorExpansion(object):
             self.evaluate_input_derivs(dhyper, max_order=max_order)
 
         for k in range(1, max_order + 1):
-            dinput_terms.append(input_derivs[k] / float(factorial(k)
+            dinput_terms.append(input_derivs[k] / float(factorial(k)))
 
         return dinput_terms
 
