@@ -460,7 +460,6 @@ class TestTaylorExpansion(unittest.TestCase):
             eps_order=1,
             eta_orders=[1, 0],
             prefactor=1.5,
-            # eval_eta_derivs=[ eval_deta_deps ],
             eval_g_derivs=eval_g_derivs)
 
         deps = eps1 - eps0
@@ -476,19 +475,16 @@ class TestTaylorExpansion(unittest.TestCase):
                 eps_order=2,
                 eta_orders=[0, 0],
                 prefactor=1.5,
-                #eval_eta_derivs=[ eval_deta_deps ],
                 eval_g_derivs=eval_g_derivs),
             sensitivity_lib.DerivativeTerm(
                 eps_order=1,
                 eta_orders=[1, 0],
                 prefactor=2,
-                #eval_eta_derivs=[ eval_deta_deps ],
                 eval_g_derivs=eval_g_derivs),
             sensitivity_lib.DerivativeTerm(
                 eps_order=1,
                 eta_orders=[1, 0],
                 prefactor=3,
-                #eval_eta_derivs=[ eval_deta_deps ],
                 eval_g_derivs=eval_g_derivs) ]
 
         dterms_combined = sensitivity_lib._consolidate_terms(dterms)
@@ -496,10 +492,6 @@ class TestTaylorExpansion(unittest.TestCase):
         self.assertEqual(2, len(dterms_combined))
 
         # TODO: test dterm.differentiate() explicity.
-
-        # assert_array_almost_equal(
-        #     sensitivity_lib.evaluate_terms(dterms, eta0, eps0, deps),
-        #     sensitivity_lib.evaluate_terms(dterms_combined, eta0, eps0, deps))
 
         dterms1 = sensitivity_lib._get_taylor_base_terms(eval_g_derivs)
 
@@ -509,32 +501,6 @@ class TestTaylorExpansion(unittest.TestCase):
             dterms1[0].evaluate(eta0, eps0, deps, deriv_terms))
 
         hess_solver = sensitivity_lib.HessianSolver(hess0, 'factorization')
-        # assert_array_almost_equal(
-        #     np.einsum('ij,j', true_deta_deps(eps0), deps),
-        #     sensitivity_lib.evaluate_dketa_depsk(
-        #         hess_solver, dterms1, eta0, eps0, deps))
-
-        # assert_array_almost_equal(
-        #     eval_deta_deps(eta0, eps0, deps),
-        #     sensitivity_lib.evaluate_dketa_depsk(
-        #         hess_solver, dterms1, eta0, eps0, deps))
-
-        # dterms2 = sensitivity_lib.differentiate_terms(hess_solver, dterms1)
-        # self.assertTrue(np.linalg.norm(sensitivity_lib.evaluate_dketa_depsk(
-        #     hess_solver, dterms2, eta0, eps0, deps)) > 0)
-        # assert_array_almost_equal(
-        #     np.einsum('ijk,j, k', true_d2eta_deps2(eps0), deps, deps),
-        #     sensitivity_lib.evaluate_dketa_depsk(
-        #         hess_solver, dterms2, eta0, eps0, deps))
-        #
-        # dterms3 = sensitivity_lib.differentiate_terms(hess_solver, dterms2)
-        # self.assertTrue(np.linalg.norm(sensitivity_lib.evaluate_dketa_depsk(
-        #     hess_solver, dterms3, eta0, eps0, deps)) > 0)
-        #
-        # assert_array_almost_equal(
-        #     np.einsum('ijkl,j,k,l', true_d3eta_deps3(eps0), deps, deps, deps),
-        #     sensitivity_lib.evaluate_dketa_depsk(
-        #         hess_solver, dterms3, eta0, eps0, deps))
 
         ###################################
         # Test the Taylor series itself.
@@ -594,12 +560,6 @@ class TestBlockHessian(unittest.TestCase):
         num_groups = 10
         d = group_size * num_groups
 
-        # def get_pd_mat(d):
-        #     a = np.random.random((d, d))
-        #     a = a + a.T + np.eye(d)
-        #     return a
-        #
-        # group_mats = np.array([ get_pd_mat(group_size) for g in range(num_groups) ])
         pattern = paragami.PatternDict()
         pattern['array'] = \
             paragami.NumericArrayPattern((num_groups, group_size))

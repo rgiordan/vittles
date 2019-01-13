@@ -878,45 +878,6 @@ def _consolidate_terms(dterms):
 
     return consolidated_dterms
 
-#
-# def evaluate_terms(dterms, eta0, eps0, deps, eta_derivs,
-#                    include_highest_eta_order=True):
-#     """
-#     Evaluate a list of derivative terms.
-#
-#     Parameters
-#     ---------------
-#     dterms : `list` of `DerivativeTerm`
-#         A list of derivative terms.
-#     eta0 : `numpy.ndarray`
-#         The value of the first argument at which the derivative is evaluated.
-#     eps0 : `numpy.ndarray`
-#         The value of the second argument at which the derivative is evaluated.
-#     deps : `numpy.ndarray`
-#         The change in epsilon by which to multiply the Jacobians.
-#     eta_derivs : `list` of `numpy.ndarray`
-#         A list where ``eta_derivs[i]`` contains
-#         :math:`d\\eta^i / d\\epsilon^i \\Delta \\epsilon^i`.
-#     include_highest_eta_order : `bool`
-#         If true, include the term with
-#         ``d^k eta / deps^k``, where ``k == order``.  The main use of these
-#         DerivativeTerms at the time of writing is precisely to evaluate this
-#         term using the other terms, and this can be accomplished by setting
-#         include_highest_eta_order to False.
-#
-#     Returns
-#     ---------------
-#         The sum of the evaluated DerivativeTerms.
-#     """
-#     vec = None
-#     for term in dterms:
-#         if include_highest_eta_order or (term.eta_orders[-1] == 0):
-#             if vec is None:
-#                 vec = term.evaluate(eta0, eps0, deps, eta_derivs)
-#             else:
-#                 vec += term.evaluate(eta0, eps0, deps, eta_derivs)
-#     return vec
-
 
 # Get the terms to start a Taylor expansion.
 def _get_taylor_base_terms(eval_g_derivs):
@@ -934,61 +895,6 @@ def _get_taylor_base_terms(eval_g_derivs):
             #eval_eta_derivs=[],
             eval_g_derivs=eval_g_derivs) ]
     return dterms1
-
-
-# Given a collection of dterms (formed either with _get_taylor_base_terms
-# or derivatives), evaluate the implied dketa_depsk.
-#
-# Is this necessary?
-# def evaluate_dketa_depsk(hess_solver, dterms, eta0, eps0, deps,
-#                          eta_derivs):
-#     """Evaluate the kth derivative of an optimum wrt a hyperparameter.
-#
-#     Parameters
-#     ----------------------
-#     hess_solver : `HessianSolver`
-#         A class to solve :math:`H^{-1} v`
-#     dterms : list of `DerivativeTerm`
-#         The terms contributing to the derivative.
-#     eta0 : `numpy.ndarray` (N, )
-#         The value of the optimization parameter.
-#     eps0 : `numpy.ndarray` (M, )
-#         The value of the hyperparameter.
-#     deps : `numpy.ndarray` (M, )
-#         The change in epsilon by which to multiply the Jacobians.
-#     eta_derivs : `list` of `numpy.ndarray`
-#         A list where ``eta_derivs[i]`` contains
-#         :math:`d\\eta^i / d\\epsilon^i \\Delta \\epsilon^i`.
-#     """
-#     vec = evaluate_terms(
-#         dterms, eta0, eps0, deps, eta_derivs,
-#         include_highest_eta_order=False)
-#     assert vec is not None
-#     return -1 * hess_solver.solve(vec)
-
-
-# def differentiate_terms(hess_solver, dterms):
-#     """
-#     Calculate the derivative of an array of DerivativeTerms.
-#
-#     Parameters
-#     ------------------
-#     hess_solver : `HessianSolver`
-#         The Hessian of the objective wrt the first argument.
-#     dterms : `list` of `DerivativeTerms`
-#         The terms to be differentiated
-#
-#     Returns:
-#     dterms_derivs : `list` of `DerivativeTerms`
-#       A list of the derivatives of ``dterms``.
-#     """
-#     # def eval_next_eta_deriv(eta, eps, deps):
-#     #     return evaluate_dketa_depsk(hess_solver, dterms, eta, eps, deps)
-#
-#     dterms_derivs = []
-#     for term in dterms:
-#         dterms_derivs += term.differentiate()
-#     return _consolidate_terms(dterms_derivs)
 
 
 class ParametricSensitivityTaylorExpansion(object):
@@ -1081,20 +987,6 @@ class ParametricSensitivityTaylorExpansion(object):
         # function evaluation.  Is it worth it?
         self.hess_solver = HessianSolver(self._hess0, 'factorization')
 
-    # Get a function returning the next derivative from the Taylor terms dterms.
-    # def _get_dkinput_dhyperk_from_terms(self, dterms):
-    #     def dkinput_dhyperk(input_val, hyper_val, dhyper, eta_derivs,
-    #                         tolerance=1e-8):
-    #         if tolerance is not None:
-    #             # Make sure you're evaluating sensitivity at the base parameters.
-    #             assert np.max(np.abs(input_val - self._input_val0)) <= tolerance
-    #             assert np.max(np.abs(hyper_val - self._hyper_val0)) <= tolerance
-    #         return evaluate_dketa_depsk(
-    #             self.hess_solver, dterms,
-    #             self._input_val0, self._hyper_val0, dhyper,
-    #             eta_derivs)
-    #     return dkinput_dhyperk
-
     def _differentiate_terms(self, dterms):
         dterms_derivs = []
         for term in dterms:
@@ -1114,19 +1006,10 @@ class ParametricSensitivityTaylorExpansion(object):
 
         self._taylor_terms_list = \
             [ _get_taylor_base_terms(self._eval_g_derivs) ]
-        # self._dkinput_dhyperk_list = []
         for k in range(1, self._order):
-            # next_dkinput_dhyperk = \
-            #     self._get_dkinput_dhyperk_from_terms(
-            #         self._taylor_terms_list[k])
             next_taylor_terms = \
                 self._differentiate_terms(self._taylor_terms_list[k - 1])
-            # self._dkinput_dhyperk_list.append(next_dkinput_dhyperk)
             self._taylor_terms_list.append(next_taylor_terms)
-
-        # self._dkinput_dhyperk_list.append(
-        #     self._get_dkinput_dhyperk_from_terms(
-        #         self._taylor_terms_list[self._order - 1]))
 
     def _evaluate_dkinput_dhyperk(self, dhyper, input_derivs, k):
         """
@@ -1154,8 +1037,6 @@ class ParametricSensitivityTaylorExpansion(object):
                     self._order))
         if len(input_derivs) < k - 1:
             raise ValueError('Not enough eta_derivs provided.')
-        # deriv_fun = self._dkinput_dhyperk_list[k - 1]
-        # return deriv_fun(self._input_val0, self._hyper_val0, dhyper)
         vec = np.zeros_like(self._input_val0)
         print('----------Evaluating term ', k)
         for term in self._taylor_terms_list[k - 1]:
@@ -1163,24 +1044,12 @@ class ParametricSensitivityTaylorExpansion(object):
             # Exclude the highest order eta derivative -- this what
             # we are trying to calculate.
             if (term.eta_orders[-1] == 0):
-                # if vec is None:
                 vec += \
                     term.evaluate(
                         eta0=self._input_val0,
                         eps0=self._hyper_val0,
                         deps=dhyper,
                         eta_derivs=input_derivs)
-                # else:
-                # vec += term.evaluate(eta0, eps0, deps, eta_derivs)
-        # return vec
-        # vec = evaluate_terms(
-        #     self._taylor_terms_list[k],
-        #     eta0=self._input_val0,
-        #     eps0=self._hyper_val0,
-        #     deps=dhyper,
-        #     eta_derivs=eta_derivs,
-        #     include_highest_eta_order=False)
-        # assert vec is not None
         return -1 * self.hess_solver.solve(vec)
 
 
