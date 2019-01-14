@@ -735,7 +735,6 @@ class DerivativeTerm:
 
         # TODO: this check is best done elsewhere
         if len(eta_derivs) < self._order - 1:
-            print('>>>>>>>>>.', eta_derivs, self._order)
             raise ValueError('Not enough derivatives in ``eta_derivs``.')
 
         # First eta arguments, then epsilons.
@@ -1038,9 +1037,7 @@ class ParametricSensitivityTaylorExpansion(object):
         if len(input_derivs) < k - 1:
             raise ValueError('Not enough eta_derivs provided.')
         vec = np.zeros_like(self._input_val0)
-        print('----------Evaluating term ', k)
         for term in self._taylor_terms_list[k - 1]:
-            print('Evaluating term ', term, term.eta_orders)
             # Exclude the highest order eta derivative -- this what
             # we are trying to calculate.
             if (term.eta_orders[-1] == 0):
