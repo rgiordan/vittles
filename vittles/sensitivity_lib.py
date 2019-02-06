@@ -12,7 +12,7 @@ from scipy.sparse import coo_matrix
 import warnings
 
 from paragami import FlattenFunctionInput
-from .solver_lib import HessianSolver
+from .solver_lib import SystemSolver
 
 
 ##############
@@ -116,7 +116,7 @@ class LinearResponseCovariances:
             self._hess0 = hessian_at_opt
 
         method = 'factorization' if factorize_hessian else 'cg'
-        self.hess_solver = HessianSolver(self._hess0, method)
+        self.hess_solver = SystemSolver(self._hess0, method)
 
         if validate:
             # Check that the gradient of the objective is zero at the optimum.
@@ -375,7 +375,7 @@ class HyperparameterSensitivityLinearApproximation:
             raise ValueError('``hessian_at_opt`` is the wrong shape.')
 
         method = 'factorization' if factorize_hessian else 'cg'
-        self.hess_solver = HessianSolver(self._hess0, method)
+        self.hess_solver = SystemSolver(self._hess0, method)
 
         if validate_optimum:
             if grad_tol is None:
@@ -908,7 +908,7 @@ class ParametricSensitivityTaylorExpansion(object):
         # the Hessian will have an extra dimension.  This is a confusing
         # error that we could catch explicitly at the cost of an extra
         # function evaluation.  Is it worth it?
-        self.hess_solver = HessianSolver(self._hess0, 'factorization')
+        self.hess_solver = SystemSolver(self._hess0, 'factorization')
 
     def _differentiate_terms(self, dterms):
         dterms_derivs = []

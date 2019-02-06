@@ -4,7 +4,7 @@ from scipy.linalg import cho_factor, cho_solve
 import warnings
 
 
-class HessianSolver:
+class SystemSolver:
     """A class to provide a common interface for solving :math:`H^{-1} g`.
     """
     def __init__(self, h, method):
