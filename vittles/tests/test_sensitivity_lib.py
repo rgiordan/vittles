@@ -6,13 +6,14 @@ from copy import deepcopy
 import itertools
 from numpy.testing import assert_array_almost_equal
 import paragami
-import vittles
-from vittles import sensitivity_lib
 import scipy as sp
 from test_utils import QuadraticModel
 import unittest
 import warnings
 
+import vittles
+from vittles import sensitivity_lib
+from vittles import solver_lib
 
 class TestHessianSolver(unittest.TestCase):
     def test_solver(self):
@@ -26,10 +27,10 @@ class TestHessianSolver(unittest.TestCase):
 
         for h in [h_dense, h_sparse]:
             for method in ['factorization', 'cg']:
-                h_solver = sensitivity_lib.HessianSolver(h, method)
+                h_solver = solver_lib.HessianSolver(h, method)
                 assert_array_almost_equal(h_solver.solve(v), h_inv_v)
 
-        h_solver = vittles.sensitivity_lib.HessianSolver(h_dense, 'cg')
+        h_solver = solver_lib.HessianSolver(h_dense, 'cg')
         h_solver.set_cg_options({'maxiter': 1})
         with self.assertWarns(UserWarning):
             # With only one iteration, the CG should fail and raise a warning.
@@ -500,7 +501,7 @@ class TestTaylorExpansion(unittest.TestCase):
             dg_deps(eta0, eps0, deps),
             dterms1[0].evaluate(eta0, eps0, deps, deriv_terms))
 
-        hess_solver = sensitivity_lib.HessianSolver(hess0, 'factorization')
+        hess_solver = solver_lib.HessianSolver(hess0, 'factorization')
 
         ###################################
         # Test the Taylor series itself.
