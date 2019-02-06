@@ -355,7 +355,8 @@ class HyperparameterSensitivityLinearApproximation:
     def __init__(
         self,
         objective_fun,
-        opt_par_value, hyper_par_value,
+        opt_par_value,
+        hyper_par_value,
         validate_optimum=False,
         hessian_at_opt=None,
         cross_hess_at_opt=None,
@@ -413,7 +414,6 @@ class HyperparameterSensitivityLinearApproximation:
 
         if hyper_par_objective_fun is None:
             self._hyper_par_objective_fun = self._objective_fun
-            self._hyper_obj_fun = self._objective_fun
         else:
             self._hyper_par_objective_fun = hyper_par_objective_fun
 
@@ -1250,3 +1250,63 @@ class SparseBlockHessian():
         d = len(opt_par)
         h_sparse = coo_matrix((mat_vals, (mat_rows, mat_cols)), (d, d))
         return h_sparse
+
+    def get_global_hessian(self, opt_par, global_inds=None, print_every=0):
+        """Get the dense Hessian terms for the global parameters, which
+        are, by default, indexed by any indices not in ``_sparsity_array``.
+        """
+        local_inds = np.hstack(self._sparsity_array)
+        if global_inds is None:
+            global_inds = np.setdiff1d(np.arange(len(opt_par)), local_inds)
+
+        global_local_intersection = np.intersect1d(global_inds, local_inds)
+        if len(global_local_intersection) > 0:
+            raise ValueError(
+                'The global and local indices must be disjoint.  {}'.format(
+                    global_local_intersection))
+
+        mat_vals = [] # These will be the entries of the Hessian
+        mat_rows = [] # These will be the row indices
+        mat_cols = [] # These will be the column indices
+
+        v = np.zeros_like(opt_par)
+        count = 0
+        for ig in global_inds:
+            if print_every > 0:
+                if count % print_every == 0:
+                    print('Global index {} of {}.'.format(
+                        count, len(global_inds)))
+            v[ig] = 1
+            hess_row = self._f_fwd_hess(opt_par, v)
+            for il in local_inds:
+                mat_vals.append(hess_row[il])
+                mat_cols.append(ig)
+                mat_rows.append(il)
+
+                mat_vals.append(hess_row[il])
+                mat_cols.append(il)
+                mat_rows.append(ig)
+
+            for ig2 in global_inds:
+                mat_vals.append(0.5 * hess_row[ig2])
+                mat_cols.append(ig)
+                mat_rows.append(ig2)
+
+                mat_vals.append(0.5 * hess_row[ig2])
+                mat_cols.append(ig2)
+                mat_rows.append(ig)
+
+            v[ig] = 0
+            count += 1
+
+        if print_every > 0:
+            print('Done differentiating.')
+
+        d = len(opt_par)
+        h_sparse = coo_matrix((mat_vals, (mat_rows, mat_cols)), (d, d))
+        return h_sparse
+
+    def get_hessian(self, opt_par, print_every=0):
+        local_hessian = self.get_block_hessian(opt_par, print_every=print_every)
+        global_hessian = self.get_global_hessian(opt_par, print_every=print_every)
+        return local_hessian + global_hessian
