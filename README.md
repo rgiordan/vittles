@@ -30,7 +30,7 @@ still in development. We encourage users to contact the author (github
 user `rgiordan`) for advice, bugs, or if you're using the package for
 something important.
 
-<!-- ### Installation.
+### Installation.
 
 To install the latest tagged version, install with `pip`:
 
@@ -42,6 +42,6 @@ the respository and use the master branch instead.
 ### Documentation and Examples.
 
 For examples and API documentation, see
-[readthedocs](https://vittles.readthedocs.io/).
+[readthedocs](https://vittles-python.readthedocs.io/en/latest/index.html).
 
-Alternatively, check out the repo and run `make html` in `docs/`. -->
+Alternatively, check out the repo and run `make html` in `docs/`.
