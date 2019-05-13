@@ -284,9 +284,13 @@ class HyperparameterSensitivityLinearApproximation:
         validate_optimum=False,
         hessian_at_opt=None,
         cross_hess_at_opt=None,
+        sens_mat=None,
         factorize_hessian=True,
         hyper_par_objective_fun=None,
-        grad_tol=1e-8):
+        grad_tol=1e-8,
+        system_solver=None,
+        compute_hess=True,
+        cg_opts={}):
         """
         Parameters
         --------------
@@ -351,16 +355,20 @@ class HyperparameterSensitivityLinearApproximation:
 
         self.set_base_values(
             opt_par_value, hyper_par_value,
-            hessian_at_opt, cross_hess_at_opt,
+            hessian_at_opt, cross_hess_at_opt,sens_mat,
             factorize_hessian,
             validate_optimum=validate_optimum,
-            grad_tol=self._grad_tol)
+            grad_tol=self._grad_tol,
+            system_solver=system_solver,
+            compute_hess=compute_hess,
+            cg_opts=cg_opts)
 
     def set_base_values(self,
                         opt_par_value, hyper_par_value,
-                        hessian_at_opt, cross_hess_at_opt,
+                        hessian_at_opt, cross_hess_at_opt,sens_mat,
                         factorize_hessian,
-                        validate_optimum=True, grad_tol=None):
+                        validate_optimum=True, grad_tol=None,
+                        system_solver=None, compute_hess=True, cg_opts={}):
 
         # Set the values of the optimal parameters.
         self._opt0 = deepcopy(opt_par_value)
@@ -368,14 +376,23 @@ class HyperparameterSensitivityLinearApproximation:
 
         # Set the values of the Hessian at the optimum.
         if hessian_at_opt is None:
-            self._hess0 = self._obj_fun_hessian(self._opt0, self._hyper0)
+            if compute_hess or (system_solver is None):
+                print('computing hessian ... ')
+                self._hess0 = self._obj_fun_hessian(self._opt0, self._hyper0)
+            else:
+                self._hess0 = None
         else:
             self._hess0 = hessian_at_opt
-        if self._hess0.shape != (len(self._opt0), len(self._opt0)):
+        if (self._hess0 is not None) and \
+            (self._hess0.shape != (len(self._opt0), len(self._opt0))):
             raise ValueError('``hessian_at_opt`` is the wrong shape.')
 
-        method = 'factorization' if factorize_hessian else 'cg'
-        self.hess_solver = SystemSolver(self._hess0, method)
+        if system_solver is None:
+            method = 'factorization' if factorize_hessian else 'cg'
+            self.hess_solver = SystemSolver(self._hess0, method)
+            self.hess_solver.set_cg_options(cg_opts)
+        else:
+            self.hess_solver = system_solver
 
         if validate_optimum:
             if grad_tol is None:
@@ -394,14 +411,20 @@ class HyperparameterSensitivityLinearApproximation:
                 raise ValueError(err_msg)
 
         if cross_hess_at_opt is None:
+            print('computing cross hessian ... ')
             self._cross_hess = self._hyper_obj_cross_hess(self._opt0, self._hyper0)
         else:
             self._cross_hess = cross_hess_at_opt
         if self._cross_hess.shape != (len(self._opt0), len(self._hyper0)):
             raise ValueError('``cross_hess_at_opt`` is the wrong shape.')
 
-        self._sens_mat = -1 * self.hess_solver.solve(self._cross_hess)
-
+        if sens_mat is None:
+            print('solving sensitivity matrix ... ')
+            self._sens_mat = -1 * self.hess_solver.solve(self._cross_hess)
+        else:
+            self._sens_mat = sens_mat
+        if self._sens_mat.shape != (len(self._opt0), len(self._hyper0)):
+            raise ValueError('``sens_mat`` is the wrong shape.')
 
     # Methods:
     def get_dopt_dhyper(self):
