@@ -565,7 +565,7 @@ class DerivativeTerm:
         The total number of epsilon derivatives of g.
     eta_orders:
         A vector of length order - 1.  Entry i contains the number
-        of terms d\eta^{i + 1} / d\epsilon^{i + 1}.
+        of terms of the form d\eta^{i + 1} / d\epsilon^{i + 1}.
     prefactor:
         The constant multiple in front of this term.
 
@@ -594,11 +594,6 @@ class DerivativeTerm:
             of terms :math:`d\\eta^{i + 1} / d\\epsilon^{i + 1}`.
         prefactor:
             The constant multiple in front of this term.
-        # eval_eta_derivs:
-        #     A vector of functions to evaluate :math:`d\\eta^i / d\\epsilon^i`.
-        #     The functions should take arguments (eta0, eps0, deps) and the
-        #     i-th entry should evaluate
-        #     :math:`d\\eta^i / d\\epsilon^i (d \\epsilon^i) |_{\\eta_0, \\epsilon_0}`.
         eval_g_derivs:
             A list of lists of g jacobian vector product functions.
             The array should be such that
@@ -809,13 +804,11 @@ def _get_taylor_base_terms(eval_g_derivs):
             eps_order=1,
             eta_orders=[0],
             prefactor=1.0,
-            #eval_eta_derivs=[],
             eval_g_derivs=eval_g_derivs),
         DerivativeTerm(
             eps_order=0,
             eta_orders=[1],
             prefactor=1.0,
-            #eval_eta_derivs=[],
             eval_g_derivs=eval_g_derivs) ]
     return dterms1
 
@@ -933,6 +926,9 @@ class ParametricSensitivityTaylorExpansion(object):
             next_taylor_terms = \
                 self._differentiate_terms(self._taylor_terms_list[k - 1])
             self._taylor_terms_list.append(next_taylor_terms)
+
+    def get_max_order(self):
+        return self._order
 
     def _evaluate_dkinput_dhyperk(self, dhyper, input_derivs, k):
         """
