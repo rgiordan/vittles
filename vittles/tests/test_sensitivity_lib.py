@@ -506,6 +506,7 @@ class TestTaylorExpansion(unittest.TestCase):
         ###################################
         # Test the Taylor series itself.
 
+        test_order = 3
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             taylor_expansion = \
@@ -513,9 +514,10 @@ class TestTaylorExpansion(unittest.TestCase):
                     objective_function=objective,
                     input_val0=eta0,
                     hyper_val0=eps0,
-                    order=3,
+                    order=test_order,
                     hess0=hess0)
 
+        self.assertEqual(test_order, taylor_expansion.get_max_order())
         taylor_expansion.print_terms(k=3)
 
         d1 = np.einsum('ij,j', true_deta_deps(eps0), deps)
