@@ -46,7 +46,7 @@ setup(
     name='vittles',
     version=versioneer.get_version(),
     cmdclass=versioneer.get_cmdclass(),
-    description="Python pacakge to flatten and fold parameter data structures.",
+    description="Python package to flatten and fold parameter data structures.",
     long_description=readme,
     author="Ryan Giordano",
     author_email='rgiordan@gmail.com',
