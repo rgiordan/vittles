@@ -16,6 +16,12 @@ notifications:
     on_success: never # default: change
     on_failure: always # default: always
 
+# Needed for paragami to install with scikit-sparse and for the autograd commit
+before_install:
+  - sudo apt-get install -y libsuitesparse-dev
+  - pip install --upgrade pip>19
+  - pip install numpy # Needed for https://github.com/scikit-sparse/scikit-sparse/issues/55
+
 install:
   # Install this package and the packages listed in requirements.txt.
   - pip install .
