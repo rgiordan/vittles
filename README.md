@@ -4,6 +4,7 @@
 
 [![image](https://codecov.io/gh/rgiordan/vittles/branch/master/graph/badge.svg)](https://codecov.io/gh/rgiordan/vittles)
 
+
 ## Description.
 
 This is a library (very much still in development) intended to make
