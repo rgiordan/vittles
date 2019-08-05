@@ -26,21 +26,11 @@ here = path.abspath(path.dirname(__file__))
 with open(path.join(here, 'README.md'), encoding='utf-8') as readme_file:
     readme = readme_file.read()
 
-# # Parse requirements.txt, ignoring any commented-out or git lines.
-# with open(path.join(here, 'requirements.txt')) as requirements_file:
-#     requirements_lines = requirements_file.read().splitlines()
-#
-# requirements = [line for line in requirements_lines
-#                 if not (line.startswith('#') or line.startswith('git'))]
-#
-# git_requirements = [line for line in requirements_lines
-#                      if line.startswith('git')]
-#
-# # git repos also need to be listed in the requirements.
-# for git_req in git_requirements:
-#     loc = git_requirements[0].find('egg=') + 4
-#     requirements += [ git_requirements[0][loc:] ]
+with open(path.join(here, 'requirements.txt')) as requirements_file:
+    requirements_lines = requirements_file.read().splitlines()
 
+requirements = [line for line in requirements_lines
+                if not (line.startswith('#') )]
 
 setup(
     name='vittles',
@@ -67,7 +57,8 @@ setup(
         },
     # install_requires=requirements,
     # dependency_links=git_requirements,
-    install_requires=['numpy', 'scipy', 'paragami', 'autograd @ git+https://github.com/HIPS/autograd@815a0b97ada3c0c4b854c961706cc56cca8b7834#egg=autograd'],
+    #install_requires=['numpy', 'scipy', 'paragami', 'autograd @ git+https://github.com/HIPS/autograd@815a0b97ada3c0c4b854c961706cc56cca8b7834#egg=autograd'],
+    install_requires=requirements,
     classifiers=[
         'Programming Language :: Python :: 3',
         'Natural Language :: English',
