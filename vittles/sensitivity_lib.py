@@ -126,7 +126,7 @@ class LinearResponseCovariances:
             newton_step_norm = np.linalg.norm(newton_step)
             if newton_step_norm > grad_tol:
                 err_msg = \
-                    'The gradient is not zero at the putatively optimal ' + \
+                    'The gradient is not zero at the proposed optimal ' + \
                     'values.  ||newton_step|| = {} > {} = grad_tol'.format(
                         newton_step_norm, grad_tol)
                 raise ValueError(err_msg)
@@ -388,7 +388,7 @@ class HyperparameterSensitivityLinearApproximation:
             newton_step_norm = np.linalg.norm(newton_step)
             if newton_step_norm > grad_tol:
                 err_msg = \
-                    'The gradient is not zero at the putatively optimal ' + \
+                    'The gradient is not zero at the proposed optimal ' + \
                     'values.  ||newton_step|| = {} > {} = grad_tol'.format(
                         newton_step_norm, grad_tol)
                 raise ValueError(err_msg)
