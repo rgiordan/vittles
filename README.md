@@ -9,6 +9,10 @@
 This is a library (very much still in development) intended to make
 sensitivity analysis easier for optimization problems. For background and motivation, see the following papers:
 
+A Higher-Order Swiss Army Infinitesimal Jackknife
+Ryan Giordano, Michael I. Jordan, Tamara Broderick
+<https://arxiv.org/abs/1907.12116>
+
 Covariances, Robustness, and Variational Bayes
 Ryan Giordano, Tamara Broderick, Michael I. Jordan
 <https://arxiv.org/abs/1709.02536>
