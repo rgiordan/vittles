@@ -30,13 +30,13 @@ with open(path.join(here, 'requirements.txt')) as requirements_file:
     requirements_lines = requirements_file.read().splitlines()
 
 requirements = [line for line in requirements_lines
-                if not (line.startswith('#') )]
+                if not (line.startswith('#')) ]
 
 setup(
     name='vittles',
     version=versioneer.get_version(),
     cmdclass=versioneer.get_cmdclass(),
-    description="Python package to flatten and fold parameter data structures.",
+    description="Python package to estimate sensitivity of optima to hyperparameters.",
     long_description=readme,
     author="Ryan Giordano",
     author_email='rgiordan@gmail.com',
@@ -55,9 +55,6 @@ setup(
             # 'path/to/data_file',
             ]
         },
-    # install_requires=requirements,
-    # dependency_links=git_requirements,
-    #install_requires=['numpy', 'scipy', 'paragami', 'autograd @ git+https://github.com/HIPS/autograd@815a0b97ada3c0c4b854c961706cc56cca8b7834#egg=autograd'],
     install_requires=requirements,
     classifiers=[
         'Programming Language :: Python :: 3',
