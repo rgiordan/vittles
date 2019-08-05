@@ -4,7 +4,6 @@
 
 [![image](https://codecov.io/gh/rgiordan/vittles/branch/master/graph/badge.svg)](https://codecov.io/gh/rgiordan/vittles)
 
-
 ## Description.
 
 This is a library (very much still in development) intended to make
@@ -43,6 +42,7 @@ To install the latest tagged version, install with `pip`:
 
 Note that `vittles` is under rapid development, so you may want to clone
 the respository and use the master branch instead.
+
 
 ### Documentation and Examples.
 
