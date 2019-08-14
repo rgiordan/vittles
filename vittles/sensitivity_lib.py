@@ -4,6 +4,8 @@
 
 import autograd
 import autograd.numpy as np
+from autograd.core import primitive, defvjp, defjvp
+
 from copy import deepcopy
 from math import factorial
 import scipy as sp
@@ -349,6 +351,10 @@ class HyperparameterSensitivityLinearApproximation:
 
         self._grad_tol = grad_tol
 
+        # Define the derivatives of `get_opt_par`
+        defvjp(self.get_opt_par, self._get_parhat_vjp)
+        defjvp(self.get_opt_par, self._get_parhat_jvp)
+
         self.set_base_values(
             opt_par_value, hyper_par_value,
             hessian_at_opt, cross_hess_at_opt,
@@ -422,6 +428,42 @@ class HyperparameterSensitivityLinearApproximation:
         return \
             self._opt0 + \
             self._sens_mat @ (new_hyper_par_value - self._hyper0)
+
+    def _check_hyper_par_value(self, hyper_par, tolerance=1e-8):
+        if np.max(np.abs(hyper_par - self._hyper0)) > tolerance:
+            raise ValueError(
+                'get_opt_par must be evaluated at ',
+                self._hyper0, ' != ', hyper_par)
+
+    @primitive
+    def get_opt_par(self, hyper_par):
+        """Evaluate the optimum as a differentiable function.
+
+        Parameters
+        -------------
+        hyper_par: numeric
+            The value must match `hyper_par_value`, but it can be an
+            array box, allowing functions of the optimal parameter to be
+            differentiated with `autograd`.
+        """
+
+        self._check_hyper_par_value(hyper_par)
+        return self._opt0
+
+    # Reverse mode
+    def _get_parhat_vjp(ans, hyperpar):
+        self._check_hyperpar(hyperpar)
+        @primitive
+        def vjp(g):
+            return g.T @ self._sens_mat
+        return vjp
+
+
+    # Forward mode
+    @primitive
+    def _get_parhat_jvp(g, ans, hyperpar):
+        self._check_hyperpar(hyperpar)
+        return self._sens_mat @ g
 
 
 ################################
