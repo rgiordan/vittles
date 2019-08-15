@@ -533,7 +533,7 @@ def _evaluate_term_fwd(term, eta0, eps0, deps, eta_derivs, eval_g_derivs):
     if len(eta_derivs) < term._order - 1:
         raise ValueError('Not enough derivatives in ``eta_derivs``.')
 
-    # The derivative of g needed for this particular term.
+    # Get the derivative of g needed for this particular term.
     eval_g_deriv = \
         eval_g_derivs[np.sum(term.eta_orders)][term.eps_order]
 
