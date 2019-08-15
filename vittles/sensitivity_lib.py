@@ -351,10 +351,6 @@ class HyperparameterSensitivityLinearApproximation:
 
         self._grad_tol = grad_tol
 
-        # Define the derivatives of `get_opt_par`
-        defvjp(self.get_opt_par, self._get_parhat_vjp)
-        defjvp(self.get_opt_par, self._get_parhat_jvp)
-
         self.set_base_values(
             opt_par_value, hyper_par_value,
             hessian_at_opt, cross_hess_at_opt,
@@ -435,36 +431,49 @@ class HyperparameterSensitivityLinearApproximation:
                 'get_opt_par must be evaluated at ',
                 self._hyper0, ' != ', hyper_par)
 
-    @primitive
-    def get_opt_par(self, hyper_par):
-        """Evaluate the optimum as a differentiable function.
-
-        Parameters
-        -------------
-        hyper_par: numeric
-            The value must match `hyper_par_value`, but it can be an
-            array box, allowing functions of the optimal parameter to be
-            differentiated with `autograd`.
+    def get_opt_par_function(self):
+        """Return a differentiable function returning the optimal value.
         """
 
-        self._check_hyper_par_value(hyper_par)
-        return self._opt0
-
-    # Reverse mode
-    def _get_parhat_vjp(ans, hyperpar):
-        self._check_hyperpar(hyperpar)
         @primitive
-        def vjp(g):
-            return g.T @ self._sens_mat
-        return vjp
+        def get_opt_par(hyper_par):
+            """Evaluate the optimum as a differentiable function.
 
+            Parameters
+            -------------
+            hyper_par: numeric
+                The value must match `hyper_par_value`, but it can be an
+                array box, allowing functions of the optimal parameter to be
+                differentiated with `autograd`.
+            """
 
-    # Forward mode
-    @primitive
-    def _get_parhat_jvp(g, ans, hyperpar):
-        self._check_hyperpar(hyperpar)
-        return self._sens_mat @ g
+            self._check_hyper_par_value(hyper_par)
+            return self._opt0
 
+        # Reverse mode.
+        def _get_parhat_vjp(ans, hyperpar):
+            self._check_hyper_par_value(hyperpar)
+
+            # Make this primitive to prevent attempting higher-order derivatives.
+            # To do so efficiently will require a higher order approximation.
+            @primitive
+            def vjp(g):
+                return g.T @ self._sens_mat
+            return vjp
+
+        # Forward mode.
+        # Make this primitive to prevent attempting higher-order derivatives.
+        # To do so efficiently will require a higher order approximation.
+        @primitive
+        def _get_parhat_jvp(g, ans, hyperpar):
+            self._check_hyper_par_value(hyperpar)
+            return self._sens_mat @ g
+
+        # Define the derivatives of `get_opt_par`
+        defvjp(get_opt_par, _get_parhat_vjp)
+        defjvp(get_opt_par, _get_parhat_jvp)
+
+        return get_opt_par
 
 ################################
 # Higher-order approximations. #

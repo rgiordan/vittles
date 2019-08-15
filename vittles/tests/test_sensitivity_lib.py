@@ -2,6 +2,7 @@
 
 import autograd
 import autograd.numpy as np
+
 from copy import deepcopy
 import itertools
 from numpy.testing import assert_array_almost_equal
@@ -14,6 +15,7 @@ import warnings
 import vittles
 from vittles import sensitivity_lib
 from vittles import solver_lib
+from vittles.sensitivity_lib import _append_jvp
 
 class TestSystemSolver(unittest.TestCase):
     def test_solver(self):
@@ -265,6 +267,37 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
         assert_array_almost_equal(
             get_dopt_dhyper(lam0),
             parametric_sens.get_dopt_dhyper())
+
+        # Test the differentiable objective.
+        get_opt_par = parametric_sens.get_opt_par_function()
+        assert_array_almost_equal(theta0, get_opt_par(lam0))
+        with self.assertRaises(ValueError):
+            get_opt_par(lam0 + 1)
+
+        def fun_of_opt(lam):
+            return np.exp(np.sum(get_opt_par(lam) + 0.1))
+
+        # You cannot use check_grads because you cannot evaluate
+        # `get_opt_par` at different values for finite differences.
+        dopt_dhyper = parametric_sens.get_dopt_dhyper()
+        print('----------')
+        print(fun_of_opt(lam0))
+        print(autograd.grad(fun_of_opt)(lam0))
+        print(dopt_dhyper.T @ np.full(dim, fun_of_opt(lam0)))
+        print('----------')
+        # Test reverse mode
+        assert_array_almost_equal(
+            dopt_dhyper.T @ np.full(dim, fun_of_opt(lam0)),
+            autograd.grad(fun_of_opt)(lam0))
+
+        fun_of_opt_fwd = _append_jvp(fun_of_opt)
+        delta = np.random.random(dim)
+
+        # Test forward mode
+        assert_array_almost_equal(
+            delta.T @ dopt_dhyper.T @ np.full(dim, fun_of_opt(lam0)),
+            fun_of_opt_fwd(lam0, delta))
+
 
     def test_quadratic_model(self):
         ft_vec = [False, True]
