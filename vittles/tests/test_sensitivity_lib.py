@@ -115,6 +115,64 @@ class TestAppendJVP(unittest.TestCase):
 
 
 class TestDerivativeTerm(unittest.TestCase):
+    def test_generate_two_term_fwd_derivative_array(self):
+        model = QuadraticModel(dim=3)
+
+        eta_is_free = True
+        eps_is_free = True
+        eta0, eps0 = model.get_default_flat_values(eta_is_free, eps_is_free)
+        objective = model.get_flat_objective(eta_is_free, eps_is_free)
+        obj_eta_grad = autograd.grad(objective, argnum=0)
+
+        dg_deta = sensitivity_lib._append_jvp(
+            obj_eta_grad, num_base_args=2, argnum=0)
+        dg_deps = sensitivity_lib._append_jvp(
+            obj_eta_grad, num_base_args=2, argnum=1)
+
+        d2g_deta_deta = sensitivity_lib._append_jvp(
+            dg_deta, num_base_args=2, argnum=0)
+        d2g_deta_deps = sensitivity_lib._append_jvp(
+            dg_deta, num_base_args=2, argnum=1)
+        d2g_deps_deta = sensitivity_lib._append_jvp(
+            dg_deps, num_base_args=2, argnum=0)
+        d2g_deps_deps = sensitivity_lib._append_jvp(
+            dg_deps, num_base_args=2, argnum=1)
+
+        v1 = np.random.random(len(eta0))
+        v2 = np.random.random(len(eta0))
+
+        w1 = np.random.random(len(eps0))
+        w2 = np.random.random(len(eps0))
+
+        eval_g_derivs = \
+            sensitivity_lib._generate_two_term_fwd_derivative_array(
+                obj_eta_grad, order=5)
+
+        assert_array_almost_equal(
+            obj_eta_grad(eta0, eps0),
+            eval_g_derivs[0][0](eta0, eps0))
+
+        assert_array_almost_equal(
+            dg_deta(eta0, eps0, v1),
+            eval_g_derivs[1][0](eta0, eps0, v1))
+
+        assert_array_almost_equal(
+            dg_deps(eta0, eps0, w1),
+            eval_g_derivs[0][1](eta0, eps0, w1))
+
+        assert_array_almost_equal(
+            d2g_deta_deta(eta0, eps0, v1, v2),
+            eval_g_derivs[2][0](eta0, eps0, v1, v2))
+
+        assert_array_almost_equal(
+            d2g_deta_deps(eta0, eps0, v1, w1),
+            eval_g_derivs[1][1](eta0, eps0, v1, w1))
+
+        assert_array_almost_equal(
+            d2g_deps_deps(eta0, eps0, w1, w2),
+            eval_g_derivs[0][2](eta0, eps0, w1, w2))
+
+
     def _test_derivative_term(self):
         # Test the DerivativeTerm.
 
@@ -145,6 +203,7 @@ class TestDerivativeTerm(unittest.TestCase):
             dg_deps, num_base_args=2, argnum=1)
 
         # This is a manual version of the second derivative.
+        # TODO: why do we need this?
         def eval_d2eta_deps2(eta, eps, delta_eps):
             assert np.max(np.sum(eps - eps0)) < 1e-8
             assert np.max(np.sum(eta - eta0)) < 1e-8
@@ -161,25 +220,11 @@ class TestDerivativeTerm(unittest.TestCase):
             d2eta_deps2 = -1 * np.linalg.solve(hess0, d2_terms)
             return d2eta_deps2
 
-        eval_g_derivs = \
-            sensitivity_lib._generate_two_term_fwd_derivative_array(
-                obj_eta_grad, order=5)
+        get_true_optimal_flat_theta = \
+            model.get_flat_true_optimal_theta(eta_is_free, eps_is_free)
 
-
-        assert_array_almost_equal(
-            hess0 @ v1,
-            eval_g_derivs[1][0](eta0, eps0, v1))
-
-        d2g_deta_deta(eta0, eps0, v1, v2)
-        eval_g_derivs[2][0](eta0, eps0, v1, v2)
-
-        assert_array_almost_equal(
-            d2g_deta_deta(eta0, eps0, v1, v2),
-            eval_g_derivs[2][0](eta0, eps0, v1, v2))
-
-        assert_array_almost_equal(
-            d2g_deta_deps(eta0, eps0, v1, v2),
-            eval_g_derivs[1][1](eta0, eps0, v1, v2))
+        true_deta_deps = autograd.jacobian(get_true_optimal_flat_theta)
+        true_d2eta_deps2 = autograd.jacobian(true_deta_deps)
 
         #################
 
@@ -187,7 +232,7 @@ class TestDerivativeTerm(unittest.TestCase):
         assert_array_almost_equal(
             dterm.prefactor * d2g_deta_deps(
                 eta0, eps0, eval_deta_deps(eta0, eps0, deps), deps),
-            dterm.evaluate(eta0, eps0, deps,eta_derivs))
+            dterm.evaluate(eta0, eps0, deps, eta_derivs))
 
         dterms = [
             sensitivity_lib.DerivativeTerm(
