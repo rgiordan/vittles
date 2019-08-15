@@ -1,8 +1,9 @@
 from vittles.sensitivity_lib import \
     HyperparameterSensitivityLinearApproximation, \
     ParametricSensitivityTaylorExpansion, \
-    LinearResponseCovariances, \
-    SparseBlockHessian
+    LinearResponseCovariances
+
+from vittles.sparse_hessian_lib import SparseBlockHessian
 
 from vittles.solver_lib import SystemSolver
 
