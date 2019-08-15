@@ -402,8 +402,6 @@ class DerivativeTerm:
 
     Methods
     ------------
-    evaluate:
-        Get the value of the current derivative term.
     differentiate:
         Get a list of derivatives terms resulting from differentiating this
         term.
@@ -413,8 +411,7 @@ class DerivativeTerm:
     combine_with:
         Return the sum of this term and another term.
     """
-    def __init__(self, eps_order, eta_orders, prefactor,
-                 eval_g_derivs):
+    def __init__(self, eps_order, eta_orders, prefactor):
         """
         Parameters
         -------------
@@ -425,17 +422,11 @@ class DerivativeTerm:
             of terms :math:`d\\eta^{i + 1} / d\\epsilon^{i + 1}`.
         prefactor:
             The constant multiple in front of this term.
-        eval_g_derivs:
-            A list of lists of g jacobian vector product functions.
-            The array should be such that
-            eval_g_derivs[i][j](eta0, eps0, v1 ... vi, w1 ... wj)
-            evaluates d^{i + j} G / (deta^i)(deps^j)(v1 ... vi)(w1 ... wj).
         """
         # Base properties.
         self.eps_order = eps_order
         self.eta_orders = eta_orders
         self.prefactor = prefactor
-        self._eval_g_derivs = eval_g_derivs
 
         # Derived quantities.
 
@@ -443,10 +434,6 @@ class DerivativeTerm:
         self._order = int(
             self.eps_order + \
             np.sum(self.eta_orders * np.arange(1, len(self.eta_orders) + 1)))
-
-        # The derivative of g needed for this particular term.
-        self.eval_g_deriv = \
-            eval_g_derivs[np.sum(eta_orders)][self.eps_order]
 
         # Sanity checks.
         # The rules of differentiation require that these assertions be true
@@ -468,40 +455,6 @@ class DerivativeTerm:
         return 'Order: {}\t{} * eta{} * eps[{}]'.format(
             self._order, self.prefactor, self.eta_orders, self.eps_order)
 
-    def evaluate(self, eta0, eps0, deps, eta_derivs):
-        """Evaluate the DerivativeTerm.
-
-        Parameters
-        ----------------------
-        eta0, eps0 : `numpy.ndarray`
-            Where to evaluate the derivative.
-        deps : `numpy.ndarray`
-            The direction in which to evaluate the derivative.
-        eta_derivs : `list` of `numpy.ndarray`
-            A list where ``eta_derivs[i]`` contains
-            :math:`d\\eta^i / d\\epsilon^i \\Delta \\epsilon^i`.
-        """
-
-        # TODO: this check is best done elsewhere
-        if len(eta_derivs) < self._order - 1:
-            raise ValueError('Not enough derivatives in ``eta_derivs``.')
-
-        # First eta arguments, then epsilons.
-        vec_args = []
-
-        for i in range(len(self.eta_orders)):
-            eta_order = self.eta_orders[i]
-            if eta_order > 0:
-                # vec = self._eval_eta_derivs[i](eta0, eps0, deps)
-                vec = eta_derivs[i]
-                for j in range(eta_order):
-                    vec_args.append(vec)
-
-        for i in range(self.eps_order):
-            vec_args.append(deps)
-
-        return self.prefactor * self.eval_g_deriv(eta0, eps0, *vec_args)
-
     def differentiate(self):
         derivative_terms = []
 
@@ -513,8 +466,7 @@ class DerivativeTerm:
             DerivativeTerm(
                 eps_order=self.eps_order + 1,
                 eta_orders=deepcopy(old_eta_orders),
-                prefactor=self.prefactor,
-                eval_g_derivs=self._eval_g_derivs))
+                prefactor=self.prefactor))
 
         # dG / deta.
         new_eta_orders = deepcopy(old_eta_orders)
@@ -523,8 +475,7 @@ class DerivativeTerm:
             DerivativeTerm(
                 eps_order=self.eps_order,
                 eta_orders=new_eta_orders,
-                prefactor=self.prefactor,
-                eval_g_derivs=self._eval_g_derivs))
+                prefactor=self.prefactor))
 
         # Derivatives of each d^{i}eta / deps^i term.
         for i in range(len(self.eta_orders)):
@@ -537,8 +488,7 @@ class DerivativeTerm:
                     DerivativeTerm(
                         eps_order=self.eps_order,
                         eta_orders=new_eta_orders,
-                        prefactor=self.prefactor * eta_order,
-                        eval_g_derivs=self._eval_g_derivs))
+                        prefactor=self.prefactor * eta_order))
 
         return derivative_terms
 
@@ -555,8 +505,52 @@ class DerivativeTerm:
         return DerivativeTerm(
             eps_order=self.eps_order,
             eta_orders=self.eta_orders,
-            prefactor=self.prefactor + term.prefactor,
-            eval_g_derivs=self._eval_g_derivs)
+            prefactor=self.prefactor + term.prefactor)
+
+
+def _evaluate_term_fwd(term, eta0, eps0, deps, eta_derivs, eval_g_derivs):
+    """Evaluate the DerivativeTerm in forward mode.
+
+    Parameters
+    ----------------------
+    term: `DerivativeTerm`
+        A `DerivativeTerm` object to evaluate.
+    eta0, eps0 : `numpy.ndarray`
+        Where to evaluate the derivative.
+    deps : `numpy.ndarray`
+        The direction in which to evaluate the derivative.
+    eta_derivs : `list` of `numpy.ndarray`
+        A list where ``eta_derivs[i]`` contains
+        :math:`d\\eta^i / d\\epsilon^i \\Delta \\epsilon^i`.
+    eval_g_derivs:
+        A list of lists of g jacobian vector product functions.
+        The array should be such that
+        eval_g_derivs[i][j](eta0, eps0, v1 ... vi, w1 ... wj)
+        evaluates d^{i + j} G / (deta^i)(deps^j)(v1 ... vi)(w1 ... wj).
+    """
+
+    # TODO: this check is best done elsewhere
+    if len(eta_derivs) < term._order - 1:
+        raise ValueError('Not enough derivatives in ``eta_derivs``.')
+
+    # The derivative of g needed for this particular term.
+    eval_g_deriv = \
+        eval_g_derivs[np.sum(term.eta_orders)][term.eps_order]
+
+    # First eta arguments, then epsilons.
+    vec_args = []
+
+    for i in range(len(term.eta_orders)):
+        eta_order = term.eta_orders[i]
+        if eta_order > 0:
+            vec = eta_derivs[i]
+            for j in range(eta_order):
+                vec_args.append(vec)
+
+    for i in range(term.eps_order):
+        vec_args.append(deps)
+
+    return term.prefactor * eval_g_deriv(eta0, eps0, *vec_args)
 
 
 def _generate_two_term_fwd_derivative_array(fun, order):
@@ -577,6 +571,8 @@ def _generate_two_term_fwd_derivative_array(fun, order):
     An array of functions where element eval_fun_derivs[i][j] is a function
     ``eval_fun_derivs[i][j](x1, x2, ..., v1, ... vi, w1, ..., wj)) =
     d^{i + j}fun / (dx1^i dx2^j) v1 ... vi w1 ... wj``.
+    This array can be used as the `eval_g_derivs` argument to
+    `evaluate_term_fwd`.
     """
     eval_fun_derivs = [[ fun ]]
     for x1_ind in range(order):
@@ -622,18 +618,16 @@ def _consolidate_terms(dterms):
 
 
 # Get the terms to start a Taylor expansion.
-def _get_taylor_base_terms(eval_g_derivs):
+def _get_taylor_base_terms():
     dterms1 = [ \
         DerivativeTerm(
             eps_order=1,
             eta_orders=[0],
-            prefactor=1.0,
-            eval_g_derivs=eval_g_derivs),
+            prefactor=1.0),
         DerivativeTerm(
             eps_order=0,
             eta_orders=[1],
-            prefactor=1.0,
-            eval_g_derivs=eval_g_derivs) ]
+            prefactor=1.0) ]
     return dterms1
 
 
@@ -677,8 +671,7 @@ class ParametricSensitivityTaylorExpansion(object):
             necessary calculations can be more efficient.  If
             unset, ``objective_function`` is used.
         """
-        warnings.warn(
-            'The ParametricSensitivityTaylorExpansion is experimental.')
+
         self._objective_function = objective_function
         self._objective_function_hessian = \
             autograd.hessian(self._objective_function, argnum=0)
@@ -741,11 +734,12 @@ class ParametricSensitivityTaylorExpansion(object):
 
         # You need one more gradient derivative than the order of the Taylor
         # approximation.
+        # TODO: you could make a reverse mode version of these and everything
+        # else will work the same.
         self._eval_g_derivs = _generate_two_term_fwd_derivative_array(
             self._objective_function_eta_grad, order=self._order + 1)
 
-        self._taylor_terms_list = \
-            [ _get_taylor_base_terms(self._eval_g_derivs) ]
+        self._taylor_terms_list = [ _get_taylor_base_terms() ]
         for k in range(1, self._order):
             next_taylor_terms = \
                 self._differentiate_terms(self._taylor_terms_list[k - 1])
@@ -786,11 +780,13 @@ class ParametricSensitivityTaylorExpansion(object):
             # we are trying to calculate.
             if (term.eta_orders[-1] == 0):
                 vec += \
-                    term.evaluate(
+                    _evaluate_term_fwd(
+                        term=term,
                         eta0=self._input_val0,
                         eps0=self._hyper_val0,
                         deps=dhyper,
-                        eta_derivs=input_derivs)
+                        eta_derivs=input_derivs,
+                        eval_g_derivs=self._eval_g_derivs)
         return -1 * self.hess_solver.solve(vec)
 
 
