@@ -268,11 +268,22 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
             get_dopt_dhyper(lam0),
             parametric_sens.get_dopt_dhyper())
 
+        ########################################
         # Test the differentiable objective.
         get_opt_par = parametric_sens.get_opt_par_function()
         assert_array_almost_equal(theta0, get_opt_par(lam0))
+
+        # Check that you cannot evaluate at other hyperparameters
         with self.assertRaises(ValueError):
             get_opt_par(lam0 + 1)
+
+        with self.assertRaises(ValueError):
+            autograd.grad(get_opt_par)(lam0 + 1)
+
+        delta = np.random.random(dim)
+        get_opt_par_fwd = _append_jvp(get_opt_par)
+        with self.assertRaises(ValueError):
+            get_opt_par_fwd(lam0 + 1, delta)
 
         def fun_of_opt(lam):
             return np.exp(np.sum(get_opt_par(lam) + 0.1))
@@ -280,23 +291,26 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
         # You cannot use check_grads because you cannot evaluate
         # `get_opt_par` at different values for finite differences.
         dopt_dhyper = parametric_sens.get_dopt_dhyper()
-        print('----------')
-        print(fun_of_opt(lam0))
-        print(autograd.grad(fun_of_opt)(lam0))
-        print(dopt_dhyper.T @ np.full(dim, fun_of_opt(lam0)))
-        print('----------')
+
         # Test reverse mode
         assert_array_almost_equal(
             dopt_dhyper.T @ np.full(dim, fun_of_opt(lam0)),
             autograd.grad(fun_of_opt)(lam0))
 
-        fun_of_opt_fwd = _append_jvp(fun_of_opt)
-        delta = np.random.random(dim)
-
         # Test forward mode
+        delta = np.random.random(dim)
+        fun_of_opt_fwd = _append_jvp(fun_of_opt)
         assert_array_almost_equal(
             delta.T @ dopt_dhyper.T @ np.full(dim, fun_of_opt(lam0)),
             fun_of_opt_fwd(lam0, delta))
+
+        # Check that higher orders fail.
+        with self.assertRaises(NotImplementedError):
+            autograd.hessian(fun_of_opt)(lam0)
+
+        with self.assertRaises(NotImplementedError):
+            fun_of_opt_fwd2 = _append_jvp(fun_of_opt_fwd)
+            fun_of_opt_fwd2(lam0, delta, delta)
 
 
     def test_quadratic_model(self):
