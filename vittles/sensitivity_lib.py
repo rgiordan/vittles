@@ -447,9 +447,11 @@ class DerivativeTerm:
             assert eta_order >= 0
             assert isinstance(eta_order, int)
         # assert len(self._eval_eta_derivs) >= self._order - 1
-        assert len(eval_g_derivs) > len(self.eta_orders)
-        for eta_deriv_list in eval_g_derivs:
-            assert len(eta_deriv_list) > self.eps_order
+
+        # TODO: move these checks into evaluate?
+        # assert len(eval_g_derivs) > len(self.eta_orders)
+        # for eta_deriv_list in eval_g_derivs:
+        #     assert len(eta_deriv_list) > self.eps_order
 
     def __str__(self):
         return 'Order: {}\t{} * eta{} * eps[{}]'.format(

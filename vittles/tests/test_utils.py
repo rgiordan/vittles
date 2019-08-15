@@ -4,6 +4,8 @@ import paragami
 from io import StringIO
 import sys # For testing stdout
 
+import paragami
+
 # For testing stdout
 # https://gist.github.com/mogproject/fc7c4e94ba505e95fa03
 @contextmanager
@@ -31,7 +33,22 @@ class QuadraticModel(object):
         vec = np.linspace(0.1, 0.3, num=dim)
         self.matrix = np.outer(vec, vec) + np.eye(dim)
 
-        self.lam = self.get_default_lambda()
+    def get_flat_objective(self, theta_free, lambda_free):
+        return paragami.FlattenFunctionInput(
+            self.get_objective,
+            free=[theta_free, lambda_free],
+            argnums=[0, 1],
+            patterns=[self.theta_pattern, self.lambda_pattern])
+
+    def get_flat_true_optimal_theta(self, theta_free, lambda_free):
+        return paragami.FlattenFunctionInputAndOutput(
+            self.get_true_optimal_theta,
+            input_free=lambda_free,
+            output_free=theta_free,
+            input_patterns=self.lambda_pattern,
+            output_patterns=self.theta_pattern,
+            input_argnums=[0],
+            output_retnums=[0])
 
     def get_default_lambda(self):
         return np.linspace(0.5, 10.0, num=self.dim)

@@ -39,6 +39,50 @@ class TestSystemSolver(unittest.TestCase):
             h_solver.solve(v)
 
 
+class TestDerivativeTerm(unittest.TestCase):
+    def _test_derivative_term(self):
+        # Test the DerivativeTerm.
+
+        dterm = sensitivity_lib.DerivativeTerm(
+            eps_order=1,
+            eta_orders=[1, 0],
+            prefactor=1.5)
+
+        deps = eps1 - eps0
+
+        eta_derivs = [ eval_deta_deps(eta0, eps0, deps) ]
+        assert_array_almost_equal(
+            dterm.prefactor * d2g_deta_deps(
+                eta0, eps0, eval_deta_deps(eta0, eps0, deps), deps),
+            dterm.evaluate(eta0, eps0, deps,eta_derivs))
+
+        dterms = [
+            sensitivity_lib.DerivativeTerm(
+                eps_order=2,
+                eta_orders=[0, 0],
+                prefactor=1.5),
+            sensitivity_lib.DerivativeTerm(
+                eps_order=1,
+                eta_orders=[1, 0],
+                prefactor=2),
+            sensitivity_lib.DerivativeTerm(
+                eps_order=1,
+                eta_orders=[1, 0],
+                prefactor=3) ]
+
+        dterms_combined = sensitivity_lib._consolidate_terms(dterms)
+        self.assertEqual(3, len(dterms))
+        self.assertEqual(2, len(dterms_combined))
+
+        # TODO: test dterm.differentiate() explicity.
+
+        dterms1 = sensitivity_lib._get_taylor_base_terms()
+
+        deriv_terms = [ true_deta_deps(eps0) @ deps ]
+        assert_array_almost_equal(
+            dg_deps(eta0, eps0, deps),
+            dterms1[0].evaluate(eta0, eps0, deps, deriv_terms))
+
 class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
     def _test_linear_approximation(self, dim,
                                    theta_free, lambda_free,
@@ -46,15 +90,17 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
                                    use_cross_hessian_at_opt,
                                    use_hyper_par_objective_fun):
         model = QuadraticModel(dim=dim)
-        lam_folded0 = deepcopy(model.lam)
-        lam0 = model.lambda_pattern.flatten(lam_folded0, free=lambda_free)
+        lam0 = model.lambda_pattern.flatten(
+            model.get_default_lambda(), free=lambda_free)
 
         # Sanity check that the optimum is correct.
-        get_objective_flat = paragami.FlattenFunctionInput(
-            model.get_objective,
-            free=[theta_free, lambda_free],
-            argnums=[0, 1],
-            patterns=[model.theta_pattern, model.lambda_pattern])
+        # get_objective_flat = paragami.FlattenFunctionInput(
+        #     model.get_objective,
+        #     free=[theta_free, lambda_free],
+        #     argnums=[0, 1],
+        #     patterns=[model.theta_pattern, model.lambda_pattern])
+
+        get_objective_flat = model.get_flat_objective(theta_free, lambda_free)
         get_objective_for_opt = lambda x: get_objective_flat(x, lam0)
         get_objective_for_opt_grad = autograd.grad(get_objective_for_opt)
         get_objective_for_opt_hessian = autograd.hessian(get_objective_for_opt)
@@ -70,8 +116,11 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
             x0=np.zeros(model.dim),
             method='BFGS')
 
-        theta_folded_0 = model.get_true_optimal_theta(model.lam)
-        theta0 = model.theta_pattern.flatten(theta_folded_0, free=theta_free)
+        get_flat_true_optimal_theta = \
+            model.get_flat_true_optimal_theta(theta_free, lambda_free)
+        # theta_folded_0 = model.get_true_optimal_theta(model.lam)
+        # theta0 = model.theta_pattern.flatten(theta_folded_0, free=theta_free)
+        theta0 = get_flat_true_optimal_theta(lam0)
         assert_array_almost_equal(theta0, opt_output.x)
 
         # Instantiate the sensitivity object.
@@ -220,9 +269,11 @@ class TestTaylorExpansion(unittest.TestCase):
 
         eta_is_free = True
         eps_is_free = True
+        lam0 = model.get_default_lambda()
         eta0 = model.theta_pattern.flatten(
-            model.get_true_optimal_theta(model.lam), free=eta_is_free)
-        eps0 = model.lambda_pattern.flatten(model.lam, free=eps_is_free)
+            model.get_true_optimal_theta(lam0),
+            free=eta_is_free)
+        eps0 = model.lambda_pattern.flatten(lam0, free=eps_is_free)
 
         objective = paragami.FlattenFunctionInput(
             original_fun=model.get_objective,
@@ -241,6 +292,8 @@ class TestTaylorExpansion(unittest.TestCase):
 
         eps1 = eps0 + 1e-1
         eta1 = model.get_true_optimal_theta(eps1)
+
+        deps = eps1 - eps0
 
         # Get the exact derivatives using the closed-form optimum.
         def get_true_optimal_flat_theta(lam):
@@ -265,6 +318,7 @@ class TestTaylorExpansion(unittest.TestCase):
 
         ########################
         # Test append_jvp.
+
         dobj_deta = sensitivity_lib._append_jvp(
             objective, num_base_args=2, argnum=0)
         d2obj_deta_deta = sensitivity_lib._append_jvp(
@@ -379,47 +433,6 @@ class TestTaylorExpansion(unittest.TestCase):
             d2g_deta_deps(eta0, eps0, v1, v2),
             eval_g_derivs[1][1](eta0, eps0, v1, v2))
 
-        # Test the DerivativeTerm.
-
-        dterm = sensitivity_lib.DerivativeTerm(
-            eps_order=1,
-            eta_orders=[1, 0],
-            prefactor=1.5)
-
-        deps = eps1 - eps0
-
-        eta_derivs = [ eval_deta_deps(eta0, eps0, deps) ]
-        assert_array_almost_equal(
-            dterm.prefactor * d2g_deta_deps(
-                eta0, eps0, eval_deta_deps(eta0, eps0, deps), deps),
-            dterm.evaluate(eta0, eps0, deps,eta_derivs))
-
-        dterms = [
-            sensitivity_lib.DerivativeTerm(
-                eps_order=2,
-                eta_orders=[0, 0],
-                prefactor=1.5),
-            sensitivity_lib.DerivativeTerm(
-                eps_order=1,
-                eta_orders=[1, 0],
-                prefactor=2),
-            sensitivity_lib.DerivativeTerm(
-                eps_order=1,
-                eta_orders=[1, 0],
-                prefactor=3) ]
-
-        dterms_combined = sensitivity_lib._consolidate_terms(dterms)
-        self.assertEqual(3, len(dterms))
-        self.assertEqual(2, len(dterms_combined))
-
-        # TODO: test dterm.differentiate() explicity.
-
-        dterms1 = sensitivity_lib._get_taylor_base_terms()
-
-        deriv_terms = [ true_deta_deps(eps0) @ deps ]
-        assert_array_almost_equal(
-            dg_deps(eta0, eps0, deps),
-            dterms1[0].evaluate(eta0, eps0, deps, deriv_terms))
 
         hess_solver = solver_lib.SystemSolver(hess0, 'factorization')
 
