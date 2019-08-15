@@ -416,7 +416,7 @@ class DerivativeTerm:
         Parameters
         -------------
         eps_order:
-            The total number of epsilon derivatives of g.
+            The total number of epsilon partial derivatives of g.
         eta_orders:
             A vector of length order - 1.  Entry i contains the number
             of terms :math:`d\\eta^{i + 1} / d\\epsilon^{i + 1}`.

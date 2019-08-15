@@ -15,7 +15,8 @@ import warnings
 import vittles
 from vittles import sensitivity_lib
 from vittles import solver_lib
-from vittles.sensitivity_lib import _append_jvp, _evaluate_term_fwd
+from vittles.sensitivity_lib import \
+    _append_jvp, _evaluate_term_fwd, DerivativeTerm
 
 class TestSystemSolver(unittest.TestCase):
     def test_solver(self):
@@ -173,18 +174,46 @@ class TestDerivativeTerm(unittest.TestCase):
             d2g_deps_deps(eta0, eps0, w1, w2),
             eval_g_derivs[0][2](eta0, eps0, w1, w2))
 
+    def test_differentiate(self):
+        dterm = DerivativeTerm(
+            eps_order=2,
+            eta_orders=[1, 0, 0],
+            prefactor=1.7)
 
-    def test_consolidate(self):
+        dterms = dterm.differentiate()
+
+        # We expect three terms:
+        # Order: 4	1.7 * eta[1, 0, 0, 0] * eps[3]
+        # Order: 4	1.7 * eta[2, 0, 0, 0] * eps[2]
+        # Order: 4	1.7 * eta[0, 1, 0, 0] * eps[2]
+        self.assertEqual(3, len(dterms))
+        term1_found = False
+        term2_found = False
+        term3_found = False
+        for term in dterms:
+            if term.check_similarity(
+                DerivativeTerm(3, [1, 0, 0, 0], 1.7)):
+                term1_found = True
+            elif term.check_similarity(
+                DerivativeTerm(2, [2, 0, 0, 0], 1.7)):
+                term2_found = True
+            elif term.check_similarity(
+                DerivativeTerm(2, [0, 1, 0, 0], 1.7)):
+                term3_found = True
+        self.assertTrue(term1_found and term2_found and term3_found)
+
+
+    def test_consolidate_terms(self):
         dterms = [
-            sensitivity_lib.DerivativeTerm(
+            DerivativeTerm(
                 eps_order=2,
                 eta_orders=[0, 0],
                 prefactor=1.5),
-            sensitivity_lib.DerivativeTerm(
+            DerivativeTerm(
                 eps_order=1,
                 eta_orders=[1, 0],
                 prefactor=2),
-            sensitivity_lib.DerivativeTerm(
+            DerivativeTerm(
                 eps_order=1,
                 eta_orders=[1, 0],
                 prefactor=3) ]
@@ -194,13 +223,6 @@ class TestDerivativeTerm(unittest.TestCase):
         self.assertEqual(2, len(dterms_combined))
 
     def test_evaluate_derivative_term(self):
-        # Test the DerivativeTerm.
-
-        dterm = sensitivity_lib.DerivativeTerm(
-            eps_order=1,
-            eta_orders=[1, 0],
-            prefactor=1.5)
-
         model = QuadraticModel(dim=3)
 
         eta0, eps0 = model.get_default_flat_values(True, True)
@@ -228,6 +250,11 @@ class TestDerivativeTerm(unittest.TestCase):
         d2g_deta_deps = sensitivity_lib._append_jvp(
             dg_deta, num_base_args=2, argnum=1)
 
+        dterm = DerivativeTerm(
+            eps_order=1,
+            eta_orders=[1, 0],
+            prefactor=1.5)
+
         eta_derivs = [ true_deta_deps(eps0) @ deps ]
         assert_array_almost_equal(
             dterm.prefactor * d2g_deta_deps(
@@ -242,8 +269,6 @@ class TestDerivativeTerm(unittest.TestCase):
             _evaluate_term_fwd(
                 dterms1[0], eta0, eps0, deps, deriv_terms, eval_g_derivs))
 
-    # TODO: test dterm.differentiate() explicity.
-
 
 class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
     def _test_linear_approximation(self, dim,
@@ -254,13 +279,6 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
         model = QuadraticModel(dim=dim)
         lam0 = model.lambda_pattern.flatten(
             model.get_default_lambda(), free=lambda_free)
-
-        # Sanity check that the optimum is correct.
-        # get_objective_flat = paragami.FlattenFunctionInput(
-        #     model.get_objective,
-        #     free=[theta_free, lambda_free],
-        #     argnums=[0, 1],
-        #     patterns=[model.theta_pattern, model.lambda_pattern])
 
         get_objective_flat = model.get_flat_objective(theta_free, lambda_free)
         get_objective_for_opt = lambda x: get_objective_flat(x, lam0)
@@ -280,8 +298,6 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
 
         get_flat_true_optimal_theta = \
             model.get_flat_true_optimal_theta(theta_free, lambda_free)
-        # theta_folded_0 = model.get_true_optimal_theta(model.lam)
-        # theta0 = model.theta_pattern.flatten(theta_folded_0, free=theta_free)
         theta0 = get_flat_true_optimal_theta(lam0)
         assert_array_almost_equal(theta0, opt_output.x)
 
