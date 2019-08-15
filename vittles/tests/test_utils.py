@@ -65,3 +65,11 @@ class QuadraticModel(object):
     # Testing functions that use the fact that the optimum has a closed form.
     def get_true_optimal_theta(self, lam):
         return -1 * np.linalg.solve(self.matrix, lam)
+
+    def get_default_flat_values(self, theta_free, lambda_free):
+        lam0 = self.get_default_lambda()
+        theta0 = self.get_true_optimal_theta(lam0)
+
+        return \
+            self.theta_pattern.flatten(theta0, theta_free), \
+            self.lambda_pattern.flatten(lam0, lambda_free)

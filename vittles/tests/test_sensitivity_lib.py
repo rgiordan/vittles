@@ -39,6 +39,81 @@ class TestSystemSolver(unittest.TestCase):
             h_solver.solve(v)
 
 
+class TestAppendJVP(unittest.TestCase):
+    def test_append_jvp(self):
+        eta_is_free = True
+        eps_is_free = True
+        model = QuadraticModel(dim=3)
+
+        objective = model.get_flat_objective(eta_is_free, eps_is_free)
+        eta0, eps0 = model.get_default_flat_values(eta_is_free, eps_is_free)
+
+        # Use the reverse mode derivatives as ground truth.
+        obj_eta_grad = autograd.grad(objective, argnum=0)
+        obj_eps_grad = autograd.grad(objective, argnum=1)
+        obj_eta_hessian = autograd.hessian(objective, argnum=0)
+        obj_eps_hessian = autograd.hessian(objective, argnum=1)
+        get_dobj_deta_deps = autograd.jacobian(
+            autograd.jacobian(objective, argnum=0), argnum=1)
+
+        dobj_deta = sensitivity_lib._append_jvp(
+            objective, num_base_args=2, argnum=0)
+        d2obj_deta_deta = sensitivity_lib._append_jvp(
+            dobj_deta, num_base_args=2, argnum=0)
+
+        v1 = np.random.random(len(eta0))
+        v2 = np.random.random(len(eta0))
+        v3 = np.random.random(len(eta0))
+        w1 = np.random.random(len(eps0))
+        w2 = np.random.random(len(eps0))
+        w3 = np.random.random(len(eps0))
+
+        hess0 = obj_eta_hessian(eta0, eps0)
+
+        # Check the first argument
+        assert_array_almost_equal(
+            np.einsum('i,i', obj_eta_grad(eta0, eps0), v1),
+            dobj_deta(eta0, eps0, v1))
+        assert_array_almost_equal(
+            np.einsum('ij,i,j', obj_eta_hessian(eta0, eps0), v1, v2),
+            d2obj_deta_deta(eta0, eps0, v1, v2))
+
+        # Check the second argument
+        dobj_deps = sensitivity_lib._append_jvp(
+            objective, num_base_args=2, argnum=1)
+        d2obj_deps_deps = sensitivity_lib._append_jvp(
+            dobj_deps, num_base_args=2, argnum=1)
+
+        assert_array_almost_equal(
+            np.einsum('i,i', obj_eps_grad(eta0, eps0), w1),
+            dobj_deps(eta0, eps0, w1))
+
+        assert_array_almost_equal(
+            np.einsum('ij,i,j', obj_eps_hessian(eta0, eps0), w1, w2),
+            d2obj_deps_deps(eta0, eps0, w1, w2))
+
+        # Check mixed arguments
+        d2obj_deps_deta = sensitivity_lib._append_jvp(
+            dobj_deps, num_base_args=2, argnum=0)
+        d2obj_deta_deps = sensitivity_lib._append_jvp(
+            dobj_deta, num_base_args=2, argnum=1)
+
+        assert_array_almost_equal(
+            d2obj_deps_deta(eta0, eps0, v1, w1),
+            d2obj_deta_deps(eta0, eps0, w1, v1))
+
+        assert_array_almost_equal(
+            np.einsum('ij,i,j', get_dobj_deta_deps(eta0, eps0), v1, w1),
+            d2obj_deps_deta(eta0, eps0, v1, w1))
+
+        # Check derivatives of vectors.
+        dg_deta = sensitivity_lib._append_jvp(
+            obj_eta_grad, num_base_args=2, argnum=0)
+
+        assert_array_almost_equal(
+            hess0 @ v1, dg_deta(eta0, eps0, v1))
+
+
 class TestDerivativeTerm(unittest.TestCase):
     def _test_derivative_term(self):
         # Test the DerivativeTerm.
@@ -82,6 +157,7 @@ class TestDerivativeTerm(unittest.TestCase):
         assert_array_almost_equal(
             dg_deps(eta0, eps0, deps),
             dterms1[0].evaluate(eta0, eps0, deps, deriv_terms))
+
 
 class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
     def _test_linear_approximation(self, dim,
@@ -269,17 +345,19 @@ class TestTaylorExpansion(unittest.TestCase):
 
         eta_is_free = True
         eps_is_free = True
-        lam0 = model.get_default_lambda()
-        eta0 = model.theta_pattern.flatten(
-            model.get_true_optimal_theta(lam0),
-            free=eta_is_free)
-        eps0 = model.lambda_pattern.flatten(lam0, free=eps_is_free)
+        eta0, eps0 = model.get_default_flat_values(eta_is_free, eps_is_free)
+        # lam0 = model.get_default_lambda()
+        # eta0 = model.theta_pattern.flatten(
+        #     model.get_true_optimal_theta(lam0),
+        #     free=eta_is_free)
+        # eps0 = model.lambda_pattern.flatten(lam0, free=eps_is_free)
 
-        objective = paragami.FlattenFunctionInput(
-            original_fun=model.get_objective,
-            patterns=[model.theta_pattern, model.lambda_pattern],
-            free=[eta_is_free, eps_is_free],
-            argnums=[0, 1])
+        # objective = paragami.FlattenFunctionInput(
+        #     original_fun=model.get_objective,
+        #     patterns=[model.theta_pattern, model.lambda_pattern],
+        #     free=[eta_is_free, eps_is_free],
+        #     argnums=[0, 1])
+        objective = model.get_flat_objective(eta_is_free, eps_is_free)
 
         obj_eta_grad = autograd.grad(objective, argnum=0)
         obj_eps_grad = autograd.grad(objective, argnum=1)
@@ -295,16 +373,26 @@ class TestTaylorExpansion(unittest.TestCase):
 
         deps = eps1 - eps0
 
-        # Get the exact derivatives using the closed-form optimum.
-        def get_true_optimal_flat_theta(lam):
-            theta = model.get_true_optimal_theta(lam)
-            return model.theta_pattern.flatten(theta, free=eta_is_free)
+        v1 = np.random.random(len(eta0))
+        v2 = np.random.random(len(eta0))
+        v3 = np.random.random(len(eta0))
+        w1 = np.random.random(len(eps0))
+        w2 = np.random.random(len(eps0))
+        w3 = np.random.random(len(eps0))
 
-        get_true_optimal_flat_theta = paragami.FlattenFunctionInput(
-            original_fun=get_true_optimal_flat_theta,
-            patterns=model.lambda_pattern,
-            free=eps_is_free,
-            argnums=0)
+        # Get the exact derivatives using the closed-form optimum.
+        # def get_true_optimal_flat_theta(lam):
+        #     theta = model.get_true_optimal_theta(lam)
+        #     return model.theta_pattern.flatten(theta, free=eta_is_free)
+
+        # get_true_optimal_flat_theta = paragami.FlattenFunctionInput(
+        #     original_fun=get_true_optimal_flat_theta,
+        #     patterns=model.lambda_pattern,
+        #     free=eps_is_free,
+        #     argnums=0)
+        get_true_optimal_flat_theta = \
+            model.get_flat_true_optimal_theta(eta_is_free, eps_is_free)
+
         true_deta_deps = autograd.jacobian(get_true_optimal_flat_theta)
         true_d2eta_deps2 = autograd.jacobian(true_deta_deps)
         true_d3eta_deps3 = autograd.jacobian(true_d2eta_deps2)
@@ -315,64 +403,6 @@ class TestTaylorExpansion(unittest.TestCase):
         assert_array_almost_equal(
             true_deta_deps(eps0),
             -1 * np.linalg.solve(hess0, d2f_deta_deps))
-
-        ########################
-        # Test append_jvp.
-
-        dobj_deta = sensitivity_lib._append_jvp(
-            objective, num_base_args=2, argnum=0)
-        d2obj_deta_deta = sensitivity_lib._append_jvp(
-            dobj_deta, num_base_args=2, argnum=0)
-
-        v1 = np.random.random(len(eta0))
-        v2 = np.random.random(len(eta0))
-        v3 = np.random.random(len(eta0))
-        w1 = np.random.random(len(eps0))
-        w2 = np.random.random(len(eps0))
-        w3 = np.random.random(len(eps0))
-
-        # Check the first argument
-        assert_array_almost_equal(
-            np.einsum('i,i', obj_eta_grad(eta0, eps0), v1),
-            dobj_deta(eta0, eps0, v1))
-        assert_array_almost_equal(
-            np.einsum('ij,i,j', obj_eta_hessian(eta0, eps0), v1, v2),
-            d2obj_deta_deta(eta0, eps0, v1, v2))
-
-        # Check the second argument
-        dobj_deps = sensitivity_lib._append_jvp(
-            objective, num_base_args=2, argnum=1)
-        d2obj_deps_deps = sensitivity_lib._append_jvp(
-            dobj_deps, num_base_args=2, argnum=1)
-
-        assert_array_almost_equal(
-            np.einsum('i,i', obj_eps_grad(eta0, eps0), w1),
-            dobj_deps(eta0, eps0, w1))
-
-        assert_array_almost_equal(
-            np.einsum('ij,i,j', obj_eps_hessian(eta0, eps0), w1, w2),
-            d2obj_deps_deps(eta0, eps0, w1, w2))
-
-        # Check mixed arguments
-        d2obj_deps_deta = sensitivity_lib._append_jvp(
-            dobj_deps, num_base_args=2, argnum=0)
-        d2obj_deta_deps = sensitivity_lib._append_jvp(
-            dobj_deta, num_base_args=2, argnum=1)
-
-        assert_array_almost_equal(
-            d2obj_deps_deta(eta0, eps0, v1, w1),
-            d2obj_deta_deps(eta0, eps0, w1, v1))
-
-        assert_array_almost_equal(
-            np.einsum('ij,i,j', get_dobj_deta_deps(eta0, eps0), v1, w1),
-            d2obj_deps_deta(eta0, eps0, v1, w1))
-
-        # Check derivatives of vectors.
-        dg_deta = sensitivity_lib._append_jvp(
-            obj_eta_grad, num_base_args=2, argnum=0)
-
-        assert_array_almost_equal(
-            hess0 @ v1, dg_deta(eta0, eps0, v1))
 
         ########################
         # Test derivative terms.
