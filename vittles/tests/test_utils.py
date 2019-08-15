@@ -26,9 +26,9 @@ class QuadraticModel(object):
         # and so that derivatives of all orders are nonzero.
         self.dim = dim
         self.theta_pattern = \
-            paragami.NumericArrayPattern(shape=(dim, ), lb=-10.)
+            paragami.NumericArrayPattern(shape=(dim, ), lb=-20.)
         self.lambda_pattern = \
-            paragami.NumericArrayPattern(shape=(dim, ), lb=-10.0)
+            paragami.NumericArrayPattern(shape=(dim, ), lb=-20.0)
 
         vec = np.linspace(0.1, 0.3, num=dim)
         self.matrix = np.outer(vec, vec) + np.eye(dim)
