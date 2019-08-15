@@ -125,6 +125,64 @@ class TestDerivativeTerm(unittest.TestCase):
 
         deps = eps1 - eps0
 
+        def eval_deta_deps(eta, eps, v1):
+            assert np.max(np.sum(eps - eps0)) < 1e-8
+            assert np.max(np.sum(eta - eta0)) < 1e-8
+            return -1 * np.linalg.solve(hess0, d2f_deta_deps @ v1)
+
+        dg_deta = sensitivity_lib._append_jvp(
+            obj_eta_grad, num_base_args=2, argnum=0)
+        dg_deps = sensitivity_lib._append_jvp(
+            obj_eta_grad, num_base_args=2, argnum=1)
+
+        d2g_deta_deta = sensitivity_lib._append_jvp(
+            dg_deta, num_base_args=2, argnum=0)
+        d2g_deta_deps = sensitivity_lib._append_jvp(
+            dg_deta, num_base_args=2, argnum=1)
+        d2g_deps_deta = sensitivity_lib._append_jvp(
+            dg_deps, num_base_args=2, argnum=0)
+        d2g_deps_deps = sensitivity_lib._append_jvp(
+            dg_deps, num_base_args=2, argnum=1)
+
+        # This is a manual version of the second derivative.
+        def eval_d2eta_deps2(eta, eps, delta_eps):
+            assert np.max(np.sum(eps - eps0)) < 1e-8
+            assert np.max(np.sum(eta - eta0)) < 1e-8
+
+            deta_deps = -1 * np.linalg.solve(
+                hess0, dg_deps(eta, eps, delta_eps))
+
+            # Then the terms in the second derivative.
+            d2_terms = \
+                d2g_deps_deps(eta, eps, delta_eps, delta_eps) + \
+                d2g_deps_deta(eta, eps, delta_eps, deta_deps) + \
+                d2g_deta_deps(eta, eps, deta_deps, delta_eps) + \
+                d2g_deta_deta(eta, eps, deta_deps, deta_deps)
+            d2eta_deps2 = -1 * np.linalg.solve(hess0, d2_terms)
+            return d2eta_deps2
+
+        eval_g_derivs = \
+            sensitivity_lib._generate_two_term_fwd_derivative_array(
+                obj_eta_grad, order=5)
+
+
+        assert_array_almost_equal(
+            hess0 @ v1,
+            eval_g_derivs[1][0](eta0, eps0, v1))
+
+        d2g_deta_deta(eta0, eps0, v1, v2)
+        eval_g_derivs[2][0](eta0, eps0, v1, v2)
+
+        assert_array_almost_equal(
+            d2g_deta_deta(eta0, eps0, v1, v2),
+            eval_g_derivs[2][0](eta0, eps0, v1, v2))
+
+        assert_array_almost_equal(
+            d2g_deta_deps(eta0, eps0, v1, v2),
+            eval_g_derivs[1][1](eta0, eps0, v1, v2))
+
+        #################
+
         eta_derivs = [ eval_deta_deps(eta0, eps0, deps) ]
         assert_array_almost_equal(
             dterm.prefactor * d2g_deta_deps(
@@ -346,17 +404,6 @@ class TestTaylorExpansion(unittest.TestCase):
         eta_is_free = True
         eps_is_free = True
         eta0, eps0 = model.get_default_flat_values(eta_is_free, eps_is_free)
-        # lam0 = model.get_default_lambda()
-        # eta0 = model.theta_pattern.flatten(
-        #     model.get_true_optimal_theta(lam0),
-        #     free=eta_is_free)
-        # eps0 = model.lambda_pattern.flatten(lam0, free=eps_is_free)
-
-        # objective = paragami.FlattenFunctionInput(
-        #     original_fun=model.get_objective,
-        #     patterns=[model.theta_pattern, model.lambda_pattern],
-        #     free=[eta_is_free, eps_is_free],
-        #     argnums=[0, 1])
         objective = model.get_flat_objective(eta_is_free, eps_is_free)
 
         obj_eta_grad = autograd.grad(objective, argnum=0)
@@ -381,15 +428,6 @@ class TestTaylorExpansion(unittest.TestCase):
         w3 = np.random.random(len(eps0))
 
         # Get the exact derivatives using the closed-form optimum.
-        # def get_true_optimal_flat_theta(lam):
-        #     theta = model.get_true_optimal_theta(lam)
-        #     return model.theta_pattern.flatten(theta, free=eta_is_free)
-
-        # get_true_optimal_flat_theta = paragami.FlattenFunctionInput(
-        #     original_fun=get_true_optimal_flat_theta,
-        #     patterns=model.lambda_pattern,
-        #     free=eps_is_free,
-        #     argnums=0)
         get_true_optimal_flat_theta = \
             model.get_flat_true_optimal_theta(eta_is_free, eps_is_free)
 
@@ -403,68 +441,6 @@ class TestTaylorExpansion(unittest.TestCase):
         assert_array_almost_equal(
             true_deta_deps(eps0),
             -1 * np.linalg.solve(hess0, d2f_deta_deps))
-
-        ########################
-        # Test derivative terms.
-
-        # Again, first some ground truth.
-        def eval_deta_deps(eta, eps, v1):
-            assert np.max(np.sum(eps - eps0)) < 1e-8
-            assert np.max(np.sum(eta - eta0)) < 1e-8
-            return -1 * np.linalg.solve(hess0, d2f_deta_deps @ v1)
-
-        dg_deta = sensitivity_lib._append_jvp(
-            obj_eta_grad, num_base_args=2, argnum=0)
-        dg_deps = sensitivity_lib._append_jvp(
-            obj_eta_grad, num_base_args=2, argnum=1)
-
-        d2g_deta_deta = sensitivity_lib._append_jvp(
-            dg_deta, num_base_args=2, argnum=0)
-        d2g_deta_deps = sensitivity_lib._append_jvp(
-            dg_deta, num_base_args=2, argnum=1)
-        d2g_deps_deta = sensitivity_lib._append_jvp(
-            dg_deps, num_base_args=2, argnum=0)
-        d2g_deps_deps = sensitivity_lib._append_jvp(
-            dg_deps, num_base_args=2, argnum=1)
-
-        # This is a manual version of the second derivative.
-        def eval_d2eta_deps2(eta, eps, delta_eps):
-            assert np.max(np.sum(eps - eps0)) < 1e-8
-            assert np.max(np.sum(eta - eta0)) < 1e-8
-
-            deta_deps = -1 * np.linalg.solve(
-                hess0, dg_deps(eta, eps, delta_eps))
-
-            # Then the terms in the second derivative.
-            d2_terms = \
-                d2g_deps_deps(eta, eps, delta_eps, delta_eps) + \
-                d2g_deps_deta(eta, eps, delta_eps, deta_deps) + \
-                d2g_deta_deps(eta, eps, deta_deps, delta_eps) + \
-                d2g_deta_deta(eta, eps, deta_deps, deta_deps)
-            d2eta_deps2 = -1 * np.linalg.solve(hess0, d2_terms)
-            return d2eta_deps2
-
-        eval_g_derivs = \
-            sensitivity_lib._generate_two_term_fwd_derivative_array(
-                obj_eta_grad, order=5)
-
-        assert_array_almost_equal(
-            hess0 @ v1,
-            eval_g_derivs[1][0](eta0, eps0, v1))
-
-        d2g_deta_deta(eta0, eps0, v1, v2)
-        eval_g_derivs[2][0](eta0, eps0, v1, v2)
-
-        assert_array_almost_equal(
-            d2g_deta_deta(eta0, eps0, v1, v2),
-            eval_g_derivs[2][0](eta0, eps0, v1, v2))
-
-        assert_array_almost_equal(
-            d2g_deta_deps(eta0, eps0, v1, v2),
-            eval_g_derivs[1][1](eta0, eps0, v1, v2))
-
-
-        hess_solver = solver_lib.SystemSolver(hess0, 'factorization')
 
         ###################################
         # Test the Taylor series itself.
