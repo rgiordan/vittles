@@ -641,11 +641,17 @@ class ReverseModeDerivativeArray():
         if x1.ndim != 1 or x2.ndim != 1:
             raise ValueError('x1 and x2 must be 1d arrays.')
 
+        self.deriv_arrays = [[ self._eval_deriv_arrays[0][0](x1, x2) ]]
+        dim0 = len(self.deriv_arrays[0][0])
         dim1 = len(x1)
         dim2 = len(x2)
-        max_array_size = (self._order1 ** dim1) * (self._order2 ** dim2)
-        max_allowed_array_size = 100000
-        if max_array_size > 100000 and not force:
+        total_size = 0
+        for i1 in range(self._order1 + 1):
+            for i2 in range(self._order2 + 1):
+                total_size += dim0 * (dim1 ** i1) * (dim2 ** i2)
+
+        max_allowed_size = 1000000
+        if total_size > max_allowed_size and not force:
             err_msg = ('With len(x1) = {}, len(x2) = {}, ' +
                        'order1 = {}, and order2 = {}, this will create a ' +
                        'partial derivative array of size {} > {}.  ' +
@@ -657,7 +663,6 @@ class ReverseModeDerivativeArray():
 
         self._x1 = deepcopy(x1)
         self._x2 = deepcopy(x2)
-        self.deriv_arrays = [[ self._eval_deriv_arrays[0][0](x1, x2) ]]
         if self.deriv_arrays[0][0].ndim != 1:
             raise ValueError(
                 'The base function is expected to evaluate to a 1d vector.')
