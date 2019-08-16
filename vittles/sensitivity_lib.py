@@ -594,13 +594,15 @@ def _generate_two_term_fwd_derivative_array(fun, order1, order2):
     """
     eval_fun_derivs = [[ fun ]]
     for x1_ind in range(order1 + 1):
-        if x1_ind > 0:
+        if x1_ind > 0: # The first row should be 0-th order x1 partials.
             # Append one x1 derivative.
             next_deriv = _append_jvp(
                 eval_fun_derivs[x1_ind - 1][0], num_base_args=2, argnum=0)
             eval_fun_derivs.append([ next_deriv ])
         for x2_ind in range(order2):
-            # Append one x2 derivative.
+            # Append one x2 derivative.  Note that the array already contains
+            # a 0-th order x2 partial, and we are appending order2 new
+            # derivatives, for a max order of order2 in order2 + 1 columns.
             next_deriv = _append_jvp(
                 eval_fun_derivs[x1_ind][x2_ind], num_base_args=2, argnum=1)
             eval_fun_derivs[x1_ind].append(next_deriv)
@@ -622,8 +624,10 @@ class ReverseModeDerivativeArray():
                 next_deriv = autograd.jacobian(
                     self._eval_deriv_arrays[x1_ind - 1][0], argnum=0)
                 self._eval_deriv_arrays.append([ next_deriv ])
-            for x2_ind in range(self._order2 + 1):
-                # Append one x2 derivative.
+            for x2_ind in range(self._order2):
+                # Append one x2 derivative.  Note that the array already has
+                # a 0-th order x2 partial, and we are appending order2 new
+                # derivatives, for a max order of order2 in order2 + 1 columns.
                 next_deriv = autograd.jacobian(
                     self._eval_deriv_arrays[x1_ind][x2_ind], argnum=1)
                 self._eval_deriv_arrays[x1_ind].append(next_deriv)
@@ -657,13 +661,12 @@ class ReverseModeDerivativeArray():
         if self.deriv_arrays[0][0].ndim != 1:
             raise ValueError(
                 'The base function is expected to evaluate to a 1d vector.')
-        for x1_ind in range(self._order1 + 1):
-            if x1_ind > 0:
-                self.deriv_arrays.append([
-                    self._eval_deriv_arrays[x1_ind - 1][0](x1, x2) ])
-            for x2_ind in range(self._order2 + 1):
-                self.deriv_arrays[x1_ind].append([
-                    self._eval_deriv_arrays[x1_ind][x2_ind](x1, x2) ])
+        for x1_ind in range(self._order1):
+            self.deriv_arrays.append([
+                self._eval_deriv_arrays[x1_ind][0](x1, x2) ])
+            for x2_ind in range(self._order2):
+                self.deriv_arrays[x1_ind].append(
+                    self._eval_deriv_arrays[x1_ind][x2_ind](x1, x2))
 
     def _check_location(self, x1, x2, tol=1e-8):
         if (np.max(np.abs(x1 - self._x1)) > tol) or \
@@ -702,17 +705,19 @@ class ReverseModeDerivativeArray():
         print(x1_axes)
         print(x2_axes)
         deriv_array = self.deriv_arrays[order1][order2]
-        print(deriv_array.shape)
-        print(np.array(x1).shape)
+        print('deriv_array shape', np.array(deriv_array).shape)
+        print('x1 shape', np.array(x1).shape)
+        print('x2 shape', np.array(x1).shape)
+        print('calculatin')
         foo = np.tensordot(
             deriv_array, np.array(x1),
             axes=(1 + x1_axes, x1_axes))
         print(foo.shape)
         print('--------------------')
-        return np.tensordot(np.tensordot(
-            deriv_array, np.array(x1),
-            axes=(1 + x1_axes, x1_axes)),
-            np.array(x2), axes=(1 + x2_axes, x2_axes))
+        # return np.tensordot(np.tensordot(
+        #     deriv_array, np.array(x1),
+        #     axes=(1 + x1_axes, x1_axes)),
+        #     np.array(x2), axes=(1 + x2_axes, x2_axes))
 
 
 def _consolidate_terms(dterms):

@@ -46,23 +46,38 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
     def test_evaluate_directional_derivative(self):
         def f(x1, x2):
             return np.sin(np.sum(x1) + np.sum(x2))
-        g = autograd.grad(f)
-        dim1 = 2
-        dim2 = 3
+
+        g = autograd.grad(f, argnum=0)
+        dim1 = 3
+        dim2 = 4
 
         x1 = np.random.random(dim1)
         x2 = np.random.random(dim2)
 
         max_order1 = 2
-        max_order2 = 3
+        max_order2 = 2
         deriv_array = ReverseModeDerivativeArray(
             fun=g, order1=max_order1, order2=max_order2)
         deriv_array.set_evaluation_location(x1, x2)
 
-        dx1s = [ np.random.random(dim1) for _ in range(max_order1) ]
-        dx2s = [ np.random.random(dim2) for _ in range(max_order1) ]
-        # Broken
-        #deriv_array.eval_directional_derivative(x1, x2, dx1s, dx2s)
+        assert_array_almost_equal(
+            g(x1, x2),
+            deriv_array.deriv_arrays[0][0])
+
+        print("=========")
+        print(deriv_array.deriv_arrays[0][0])
+        print(deriv_array.deriv_arrays[0][1])
+        print(deriv_array.deriv_arrays[1][0])
+        print(deriv_array.deriv_arrays[1][1])
+        print("====")
+        print(deriv_array._eval_deriv_arrays[0][1](x1, x2))
+        print(autograd.jacobian(g, argnum=1)(x1, x2))
+        print("=========")
+
+        dx1s = [ np.random.random(dim1) for _ in range(1) ]
+        dx2s = [ np.random.random(dim2) for _ in range(1) ]
+
+        deriv_array.eval_directional_derivative(x1, x2, dx1s, dx2s)
 
 class TestAppendJVP(unittest.TestCase):
     def test_append_jvp(self):
