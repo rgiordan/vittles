@@ -43,10 +43,7 @@ class TestSystemSolver(unittest.TestCase):
 
 
 class TestReverseModeDerivativeArray(unittest.TestCase):
-
-    def test_evaluate_directional_derivative(self):
-        dim1 = 3
-        dim2 = 4
+    def get_test_fun(self, dim1, dim2):
         a1 = np.random.random(dim1)
         a2 = np.random.random(dim2)
         def f(x1, x2):
@@ -56,6 +53,29 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
 
         x1 = np.random.random(dim1)
         x2 = np.random.random(dim2)
+
+        return g, x1, x2
+
+    def test_warning(self):
+        def g(x1, x2):
+            return 0.
+
+        deriv_array = ReverseModeDerivativeArray(
+            fun=g, order1=2, order2=2)
+        x1 = np.zeros(1)
+        x2 = np.zeros(1000)
+        with self.assertRaises(ValueError):
+            # 100^2 * 100^2 > 1e6, and should throw an error when you try to
+            # set the initial point.
+            deriv_array.set_evaluation_location(x1, x2)
+
+        deriv_array.set_evaluation_location(x1, x2, force=True, verbose=True)
+
+
+    def test_evaluate_directional_derivative(self):
+        dim1 = 2
+        dim2 = 4
+        g, x1, x2 = self.get_test_fun(dim1, dim2)
 
         max_order1 = 2
         max_order2 = 2
@@ -86,13 +106,28 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
 
         # Check eval_directional_derivative.
         dx1s = [ np.random.random(dim1) for _ in range(max_order1) ]
-        dx2s = [ np.random.random(dim2) for _ in range(max_order2) ]
+        dx2s = [ np.random.random(dim2) for _ in range(max_order2 - 1) ]
 
-        print('Beginning directional derivative:')
-        tic = time.time()
-        deriv_array.eval_directional_derivative(x1, x2, dx1s, dx2s)
-        tic = time.time() - tic
-        print('done with directional derivative in ', tic)
+        deriv = deriv_array.eval_directional_derivative(x1, x2, dx1s, dx2s)
+
+        # Check accuracy against _append_jvp.
+        eval_forward_deriv = g
+        for _ in range(len(dx1s)):
+            eval_forward_deriv = \
+                _append_jvp(eval_forward_deriv, num_base_args=2, argnum=0)
+        for _ in range(len(dx2s)):
+            eval_forward_deriv = \
+                _append_jvp(eval_forward_deriv, num_base_args=2, argnum=1)
+        assert_array_almost_equal(
+            eval_forward_deriv(x1, x2, *(dx1s + dx2s)),
+            deriv)
+
+        # Test the errors.
+        with self.assertRaises(ValueError):
+            deriv_array.eval_directional_derivative(x1 + 0.1, x2, dx1s, dx2s)
+
+        with self.assertRaises(ValueError):
+            deriv_array.eval_directional_derivative(x1, x2 + 0.1, dx1s, dx2s)
 
 
 class TestAppendJVP(unittest.TestCase):
