@@ -8,6 +8,7 @@ from autograd.core import primitive, defvjp, defjvp
 
 from copy import deepcopy
 from math import factorial
+from string import ascii_lowercase
 import warnings
 
 from paragami import FlattenFunctionInput
@@ -609,6 +610,31 @@ def _generate_two_term_fwd_derivative_array(fun, order1, order2):
     return eval_fun_derivs
 
 
+def _contract_tensor(deriv_array, dx1s, dx2s):
+    """Apply deriv_array to the list of vectors in dx1s and dx2s, keeping the
+    first dimension of deriv_array.
+
+    This is best understood with an example.  Consider:
+
+    >>> deriv_array = np.random.random((3, 4, 4, 2))
+    >>> dx1s = [ np.random.random(4) for _ in range(2) ]
+    >>> dx2s = [ np.random.random(2) for _ in range(1) ]
+
+    We want
+    >>> einsum('zabc,a,b,c->z', deriv_array, dx1s[0], dx1s[1], dx2s[0])
+
+    We construct this automatically for any length vectors.
+    """
+    if len(dx1s) + len(dx2s) >= len(ascii_lowercase):
+        raise ValueError(
+            'You cannot use _contract_tensor with so many vectors ' +
+            'because of the crazy way I decided to do this with einsum.')
+
+    ind_letters =  ascii_lowercase[0:(len(dx1s) + len(dx2s))]
+    einsum_str = 'z' + ''.join(ind_letters) + ',' + ','.join(ind_letters) + '->z'
+    return np.einsum(einsum_str, *([deriv_array] + dx1s + dx2s))
+
+
 class ReverseModeDerivativeArray():
     def __init__(self, fun, order1, order2):
         self._order1 = order1
@@ -669,21 +695,14 @@ class ReverseModeDerivativeArray():
             raise ValueError(
                 'The base function is expected to evaluate to a 1d vector.')
 
-        print('------------')
+        self.deriv_arrays = \
+            [[ None for _ in range(self._order2 + 1)] \
+                for _ in range(self._order1 + 1)]
         for x1_ind in range(self._order1 + 1):
-            if x1_ind > 0:
-                self.deriv_arrays.append(
-                    [ self._eval_deriv_arrays[x1_ind][x2_ind](x1, x2) ] )
             for x2_ind in range(self._order2 + 1):
                 print(x1_ind, x2_ind)
-                self.deriv_arrays[x1_ind].append(
-                    self._eval_deriv_arrays[x1_ind][x2_ind](x1, x2))
-        print('------------')
-
-        # self.deriv_arrays = \
-        #     [[ self._eval_deriv_arrays[x1_ind][x2_ind](x1, x2)
-        #        for x2_ind in range(self._order2 + 1)] \
-        #        for x1_ind in range(self._order1 + 1)]
+                self.deriv_arrays[x1_ind][x2_ind] = \
+                    self._eval_deriv_arrays[x1_ind][x2_ind](x1, x2)
 
     def _check_location(self, x1, x2, tol=1e-8):
         if (np.max(np.abs(x1 - self._x1)) > tol) or \
@@ -709,21 +728,47 @@ class ReverseModeDerivativeArray():
                         order1, self._order1))
 
         # This keeps the first dimension of the partial derivative array,
-        # and sums over the x1 first, then the x2.  This needs to matche the
+        # and sums over the x1 first, then the x2.  This needs to match the
         # order in which the partial derivatives are taken in `__init__`.
-
-        # This should be equivalent to the more readable
-        # np.sum(self.deriv_arrays[order1][order2]
-        #        np.hstack(x1, x2)[None:],
-        #        axes=All but the first axis)
         deriv_array = self.deriv_arrays[order1][order2]
-        grad_x1 = np.tensordot(
-            deriv_array, np.array(x1),
-            axes=(1 + x1_axes, x1_axes))
-        grad_x1_x2 = np.tensordot(
-            grad_x1, np.array(x2),
-            axes=(1 + x2_axes, x2_axes))
-        return grad_x1_x2
+        return _contract_tensor(deriv_array, dx1s, dx2s)
+        #
+        # # This should be equivalent to the more readable
+        # # np.sum(self.deriv_arrays[order1][order2]
+        # #        np.hstack(x1, x2)[None:],
+        # #        axes=All but the first axis)
+        # deriv_array = self.deriv_arrays[order1][order2]
+        # x1_axes = np.arange(order1)
+        # x2_axes = np.arange(order2)
+        # print('dxderiv_array1s.shape', deriv_array.shape)
+        # print('dx1s.shape', np.array(dx1s).shape)
+        # print('dx2s.shape', np.array(dx2s).shape)
+        #
+        # def prepend_dims(x, n):
+        #     # Prepend n unit-length axes to the array x.
+        #     return np.reshape(np.array(x), tuple(1 for _ in range(n)) + \
+        #                       np.array(x).shape)
+        #
+        # dx_comb = np.hstack([
+        #     prepend_dims(np.array(dx1s).T, 1),
+        #     np.array(dx2s).T ])
+        #
+        # print('---------------')
+        # print(dx_comb.shape)
+        # print(deriv_array.shape)
+        # print('---------------')
+        # return np.sum(deriv_array * dx_comb,
+        #               axes=[ i for i in range(1, deriv_array.ndim + 1 )])
+        #
+        # grad_x1 = np.tensordot(
+        #     deriv_array, np.array(dx1s),
+        #     axes=(1 + x1_axes, x1_axes))
+        # print('grad_x1.shape', grad_x1.shape)
+        #
+        # grad_x1_x2 = np.tensordot(
+        #     grad_x1, np.array(dx2s),
+        #     axes=(1 + x2_axes, x2_axes))
+        # return grad_x1_x2
 
 
 def _consolidate_terms(dterms):
