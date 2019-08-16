@@ -42,6 +42,74 @@ class TestSystemSolver(unittest.TestCase):
             h_solver.solve(v)
 
 
+class TestForwardModederivativeArray(unittest.TestCase):
+    def test_generate_two_term_fwd_derivative_array(self):
+        model = QuadraticModel(dim=3)
+
+        eta0, eps0 = model.get_default_flat_values(True, True)
+        objective = model.get_flat_objective(True, True)
+        obj_eta_grad = autograd.grad(objective, argnum=0)
+
+        max_order1 = 2
+        max_order2 = 3
+        eval_g_derivs = \
+            sensitivity_lib._generate_two_term_fwd_derivative_array(
+                obj_eta_grad, order1=max_order1, order2=max_order2)
+
+        # n^th order derivatives require n + 1 entries, because the
+        # 0-th order is included as well.
+        self.assertEqual(max_order1 + 1, len(eval_g_derivs))
+        for i in range(len(eval_g_derivs)):
+            self.assertEqual(max_order2 + 1, len(eval_g_derivs[i]))
+
+        # Use autodiff's forward mode to check.
+        dg_deta = sensitivity_lib._append_jvp(
+            obj_eta_grad, num_base_args=2, argnum=0)
+        dg_deps = sensitivity_lib._append_jvp(
+            obj_eta_grad, num_base_args=2, argnum=1)
+        d2g_deta_deta = sensitivity_lib._append_jvp(
+            dg_deta, num_base_args=2, argnum=0)
+        d2g_deta_deps = sensitivity_lib._append_jvp(
+            dg_deta, num_base_args=2, argnum=1)
+        d2g_deps_deta = sensitivity_lib._append_jvp(
+            dg_deps, num_base_args=2, argnum=0)
+        d2g_deps_deps = sensitivity_lib._append_jvp(
+            dg_deps, num_base_args=2, argnum=1)
+
+        # Directions in eta
+        v1 = np.random.random(len(eta0))
+        v2 = np.random.random(len(eta0))
+
+        # Directions in eps
+        w1 = np.random.random(len(eps0))
+        w2 = np.random.random(len(eps0))
+
+        # Test the array entries
+        assert_array_almost_equal(
+            obj_eta_grad(eta0, eps0),
+            eval_g_derivs[0][0](eta0, eps0))
+
+        assert_array_almost_equal(
+            dg_deta(eta0, eps0, v1),
+            eval_g_derivs[1][0](eta0, eps0, v1))
+
+        assert_array_almost_equal(
+            dg_deps(eta0, eps0, w1),
+            eval_g_derivs[0][1](eta0, eps0, w1))
+
+        assert_array_almost_equal(
+            d2g_deta_deta(eta0, eps0, v1, v2),
+            eval_g_derivs[2][0](eta0, eps0, v1, v2))
+
+        assert_array_almost_equal(
+            d2g_deta_deps(eta0, eps0, v1, w1),
+            eval_g_derivs[1][1](eta0, eps0, v1, w1))
+
+        assert_array_almost_equal(
+            d2g_deps_deps(eta0, eps0, w1, w2),
+            eval_g_derivs[0][2](eta0, eps0, w1, w2))
+
+
 class TestReverseModeDerivativeArray(unittest.TestCase):
     def get_test_fun(self, dim1, dim2):
         a1 = np.random.random(dim1)
@@ -71,11 +139,8 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
 
         deriv_array.set_evaluation_location(x1, x2, force=True, verbose=True)
 
-
-    def test_evaluate_directional_derivative(self):
-        dim1 = 2
-        dim2 = 4
-        g, x1, x2 = self.get_test_fun(dim1, dim2)
+    def test_derivative_arrays(self):
+        g, x1, x2 = self.get_test_fun(2, 4)
 
         max_order1 = 2
         max_order2 = 2
@@ -104,9 +169,19 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
             autograd.jacobian(g, argnum=1)(x1, x2),
             deriv_array.deriv_arrays[0][1])
 
-        # Check eval_directional_derivative.
-        dx1s = [ np.random.random(dim1) for _ in range(max_order1) ]
-        dx2s = [ np.random.random(dim2) for _ in range(max_order2 - 1) ]
+    def test_evaluate_directional_derivative(self):
+        g, x1, x2 = self.get_test_fun(2, 4)
+
+        max_order1 = 2
+        max_order2 = 2
+        deriv_array = ReverseModeDerivativeArray(
+            fun=g, order1=max_order1, order2=max_order2)
+        deriv_array.set_evaluation_location(x1, x2)
+
+        dx1s = [ np.random.random(len(x1)) \
+                 for _ in range(max_order1) ]
+        dx2s = [ np.random.random(len(x2)) \
+                 for _ in range(max_order2 - 1) ]
 
         deriv = deriv_array.eval_directional_derivative(x1, x2, dx1s, dx2s)
 
@@ -206,72 +281,6 @@ class TestAppendJVP(unittest.TestCase):
 
 
 class TestDerivativeTerm(unittest.TestCase):
-    def test_generate_two_term_fwd_derivative_array(self):
-        model = QuadraticModel(dim=3)
-
-        eta0, eps0 = model.get_default_flat_values(True, True)
-        objective = model.get_flat_objective(True, True)
-        obj_eta_grad = autograd.grad(objective, argnum=0)
-
-        max_order1 = 2
-        max_order2 = 3
-        eval_g_derivs = \
-            sensitivity_lib._generate_two_term_fwd_derivative_array(
-                obj_eta_grad, order1=max_order1, order2=max_order2)
-
-        # n^th order derivatives require n + 1 entries, because the
-        # 0-th order is included as well.
-        self.assertEqual(max_order1 + 1, len(eval_g_derivs))
-        for i in range(len(eval_g_derivs)):
-            self.assertEqual(max_order2 + 1, len(eval_g_derivs[i]))
-
-        # Use autodiff's forward mode to check.
-        dg_deta = sensitivity_lib._append_jvp(
-            obj_eta_grad, num_base_args=2, argnum=0)
-        dg_deps = sensitivity_lib._append_jvp(
-            obj_eta_grad, num_base_args=2, argnum=1)
-        d2g_deta_deta = sensitivity_lib._append_jvp(
-            dg_deta, num_base_args=2, argnum=0)
-        d2g_deta_deps = sensitivity_lib._append_jvp(
-            dg_deta, num_base_args=2, argnum=1)
-        d2g_deps_deta = sensitivity_lib._append_jvp(
-            dg_deps, num_base_args=2, argnum=0)
-        d2g_deps_deps = sensitivity_lib._append_jvp(
-            dg_deps, num_base_args=2, argnum=1)
-
-        # Directions in eta
-        v1 = np.random.random(len(eta0))
-        v2 = np.random.random(len(eta0))
-
-        # Directions in eps
-        w1 = np.random.random(len(eps0))
-        w2 = np.random.random(len(eps0))
-
-        # Test the array entries
-        assert_array_almost_equal(
-            obj_eta_grad(eta0, eps0),
-            eval_g_derivs[0][0](eta0, eps0))
-
-        assert_array_almost_equal(
-            dg_deta(eta0, eps0, v1),
-            eval_g_derivs[1][0](eta0, eps0, v1))
-
-        assert_array_almost_equal(
-            dg_deps(eta0, eps0, w1),
-            eval_g_derivs[0][1](eta0, eps0, w1))
-
-        assert_array_almost_equal(
-            d2g_deta_deta(eta0, eps0, v1, v2),
-            eval_g_derivs[2][0](eta0, eps0, v1, v2))
-
-        assert_array_almost_equal(
-            d2g_deta_deps(eta0, eps0, v1, w1),
-            eval_g_derivs[1][1](eta0, eps0, v1, w1))
-
-        assert_array_almost_equal(
-            d2g_deps_deps(eta0, eps0, w1, w2),
-            eval_g_derivs[0][2](eta0, eps0, w1, w2))
-
     def test_differentiate(self):
         dterm = DerivativeTerm(
             eps_order=2,
