@@ -676,8 +676,6 @@ class ReverseModeDerivativeArray():
             for i2 in range(self._order2 + 1):
                 total_size += dim0 * (dim1 ** i1) * (dim2 ** i2)
 
-        print('total size: ', total_size)
-
         max_allowed_size = 100000
         if total_size > max_allowed_size and not force:
             err_msg = ('With len(x1) = {}, len(x2) = {}, ' +
@@ -686,7 +684,7 @@ class ReverseModeDerivativeArray():
                        'To force the creation of these arrays, set' +
                        '`force=True`.').format(
                 dim1, dim2, self._order1, self._order2,
-                max_array_size, max_allowed_array_size)
+                total_size, max_allowed_size)
             raise ValueError(err_msg)
 
         self._x1 = deepcopy(x1)
