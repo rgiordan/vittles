@@ -10,6 +10,7 @@ import paragami
 import scipy as sp
 from test_utils import QuadraticModel
 import unittest
+import time
 import warnings
 
 import vittles
@@ -56,8 +57,8 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
         x1 = np.random.random(dim1)
         x2 = np.random.random(dim2)
 
-        max_order1 = 1
-        max_order2 = 3
+        max_order1 = 2
+        max_order2 = 2
         deriv_array = ReverseModeDerivativeArray(
             fun=g, order1=max_order1, order2=max_order2)
         deriv_array.set_evaluation_location(x1, x2)
@@ -87,7 +88,11 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
         dx1s = [ np.random.random(dim1) for _ in range(max_order1) ]
         dx2s = [ np.random.random(dim2) for _ in range(max_order2) ]
 
+        print('Beginning directional derivative:')
+        tic = time.time()
         deriv_array.eval_directional_derivative(x1, x2, dx1s, dx2s)
+        tic = time.time() - tic
+        print('done with directional derivative in ', tic)
 
 
 class TestAppendJVP(unittest.TestCase):
