@@ -661,12 +661,10 @@ class ReverseModeDerivativeArray():
         if self.deriv_arrays[0][0].ndim != 1:
             raise ValueError(
                 'The base function is expected to evaluate to a 1d vector.')
-        for x1_ind in range(self._order1):
-            self.deriv_arrays.append([
-                self._eval_deriv_arrays[x1_ind][0](x1, x2) ])
-            for x2_ind in range(self._order2):
-                self.deriv_arrays[x1_ind].append(
-                    self._eval_deriv_arrays[x1_ind][x2_ind](x1, x2))
+        self.deriv_arrays = \
+            [[ self._eval_deriv_arrays[x1_ind][x2_ind](x1, x2)
+               for x2_ind in range(self._order2 + 1)] \
+               for x1_ind in range(self._order1 + 1)]
 
     def _check_location(self, x1, x2, tol=1e-8):
         if (np.max(np.abs(x1 - self._x1)) > tol) or \
@@ -699,25 +697,14 @@ class ReverseModeDerivativeArray():
         # np.sum(self.deriv_arrays[order1][order2]
         #        np.hstack(x1, x2)[None:],
         #        axes=All but the first axis)
-        x1_axes = np.arange(order1)
-        x2_axes = np.arange(order2)
-        print('--------------------')
-        print(x1_axes)
-        print(x2_axes)
         deriv_array = self.deriv_arrays[order1][order2]
-        print('deriv_array shape', np.array(deriv_array).shape)
-        print('x1 shape', np.array(x1).shape)
-        print('x2 shape', np.array(x1).shape)
-        print('calculatin')
-        foo = np.tensordot(
+        grad_x1 = np.tensordot(
             deriv_array, np.array(x1),
             axes=(1 + x1_axes, x1_axes))
-        print(foo.shape)
-        print('--------------------')
-        # return np.tensordot(np.tensordot(
-        #     deriv_array, np.array(x1),
-        #     axes=(1 + x1_axes, x1_axes)),
-        #     np.array(x2), axes=(1 + x2_axes, x2_axes))
+        grad_x1_x2 = np.tensordot(
+            grad_x1, np.array(x2),
+            axes=(1 + x2_axes, x2_axes))
+        return grad_x1_x2
 
 
 def _consolidate_terms(dterms):
