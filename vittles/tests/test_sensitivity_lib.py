@@ -16,7 +16,8 @@ import vittles
 from vittles import sensitivity_lib
 from vittles import solver_lib
 from vittles.sensitivity_lib import \
-    _append_jvp, _evaluate_term_fwd, DerivativeTerm
+    _append_jvp, _evaluate_term_fwd, DerivativeTerm, \
+    ReverseModeDerivativeArray
 
 class TestSystemSolver(unittest.TestCase):
     def test_solver(self):
@@ -39,6 +40,29 @@ class TestSystemSolver(unittest.TestCase):
             # With only one iteration, the CG should fail and raise a warning.
             h_solver.solve(v)
 
+
+class TestReverseModeDerivativeArray(unittest.TestCase):
+
+    def test_evaluate_directional_derivative(self):
+        def f(x1, x2):
+            return np.sin(np.sum(x1) + np.sum(x2))
+        g = autograd.grad(f)
+        dim1 = 2
+        dim2 = 3
+
+        x1 = np.random.random(dim1)
+        x2 = np.random.random(dim2)
+
+        max_order1 = 2
+        max_order2 = 3
+        deriv_array = ReverseModeDerivativeArray(
+            fun=g, order1=max_order1, order2=max_order2)
+        deriv_array.set_evaluation_location(x1, x2)
+
+        dx1s = [ np.random.random(dim1) for _ in range(max_order1) ]
+        dx2s = [ np.random.random(dim2) for _ in range(max_order1) ]
+        # Broken
+        #deriv_array.eval_directional_derivative(x1, x2, dx1s, dx2s)
 
 class TestAppendJVP(unittest.TestCase):
     def test_append_jvp(self):
@@ -123,9 +147,17 @@ class TestDerivativeTerm(unittest.TestCase):
         objective = model.get_flat_objective(True, True)
         obj_eta_grad = autograd.grad(objective, argnum=0)
 
+        max_order1 = 2
+        max_order2 = 3
         eval_g_derivs = \
             sensitivity_lib._generate_two_term_fwd_derivative_array(
-                obj_eta_grad, order=5)
+                obj_eta_grad, order1=max_order1, order2=max_order2)
+
+        # n^th order derivatives require n + 1 entries, because the
+        # 0-th order is included as well.
+        self.assertEqual(max_order1 + 1, len(eval_g_derivs))
+        for i in range(len(eval_g_derivs)):
+            self.assertEqual(max_order2 + 1, len(eval_g_derivs[i]))
 
         # Use autodiff's forward mode to check.
         dg_deta = sensitivity_lib._append_jvp(
@@ -233,7 +265,7 @@ class TestDerivativeTerm(unittest.TestCase):
         obj_eta_grad = autograd.grad(objective, argnum=0)
         eval_g_derivs = \
             sensitivity_lib._generate_two_term_fwd_derivative_array(
-                obj_eta_grad, order=2)
+                obj_eta_grad, order1=2, order2=2)
 
         eps1 = eps0 + 1e-1
         eta1 = get_true_optimal_flat_theta(eps1)

@@ -446,16 +446,13 @@ class DerivativeTerm:
         for eta_order in self.eta_orders:
             assert eta_order >= 0
             assert isinstance(eta_order, int)
-        # assert len(self._eval_eta_derivs) >= self._order - 1
-
-        # TODO: move these checks into evaluate?
-        # assert len(eval_g_derivs) > len(self.eta_orders)
-        # for eta_deriv_list in eval_g_derivs:
-        #     assert len(eta_deriv_list) > self.eps_order
 
     def __str__(self):
         return 'Order: {}\t{} * eta{} * eps[{}]'.format(
             self._order, self.prefactor, self.eta_orders, self.eps_order)
+
+    def order(self):
+        return self._order
 
     def differentiate(self):
         derivative_terms = []
@@ -510,7 +507,8 @@ class DerivativeTerm:
             prefactor=self.prefactor + term.prefactor)
 
 
-def _evaluate_term_fwd(term, eta0, eps0, deps, eta_derivs, eval_g_derivs):
+def _evaluate_term_fwd(term, eta0, eps0, deps, eta_derivs, eval_g_derivs,
+                       validate=False):
     """Evaluate the DerivativeTerm in forward mode.
 
     Parameters
@@ -529,11 +527,23 @@ def _evaluate_term_fwd(term, eta0, eps0, deps, eta_derivs, eval_g_derivs):
         The array should be such that
         eval_g_derivs[i][j](eta0, eps0, v1 ... vi, w1 ... wj)
         evaluates d^{i + j} G / (deta^i)(deps^j)(v1 ... vi)(w1 ... wj).
+    validate: optional `bool`
+        If `True`, run checks for the appropriate sizes of `eta_derivs` and
+        `eval_g_derivs` and produce helpful error messages if necessary.
+        Default is `False`.
     """
 
-    # TODO: this check is best done elsewhere
-    if len(eta_derivs) < term._order - 1:
-        raise ValueError('Not enough derivatives in ``eta_derivs``.')
+    if validate:
+        if len(eta_derivs) < term.order() - 1:
+            raise ValueError('Not enough derivatives in ``eta_derivs``.')
+
+        if len(eval_g_derivs) <= len(term.eta_orders):
+            raise ValueError('Not enough eta orders in ``eval_g_derivs``.')
+
+        for eta_deriv_list in eval_g_derivs:
+            if len(eta_deriv_list) <= self.eps_order:
+                raise ValueError(
+                    'Not enough epsilon orders in ``eval_g_derivs``.')
 
     # Get the derivative of g needed for this particular term.
     eval_g_deriv = \
@@ -555,7 +565,7 @@ def _evaluate_term_fwd(term, eta0, eps0, deps, eta_derivs, eval_g_derivs):
     return term.prefactor * eval_g_deriv(eta0, eps0, *vec_args)
 
 
-def _generate_two_term_fwd_derivative_array(fun, order):
+def _generate_two_term_fwd_derivative_array(fun, order1, order2):
     """
     Generate an array of JVPs of the two arguments of the target function fun.
 
@@ -565,31 +575,144 @@ def _generate_two_term_fwd_derivative_array(fun, order):
         The function to be differentiated.  The first two arguments
         should be vectors for differentiation, i.e., fun should have signature
         fun(x1, x2, ...) and return a numeric value.
-     order: integer
-        The maximum order of the derivative to be generated.
+     order1: integer
+        The maximum order of the partial derivatives with respect to the first
+        argument.
+     order2: integer
+        The maximum order of the partial derivatives with respect to the second
+        argument.
 
     Returns
     ------------
     An array of functions where element eval_fun_derivs[i][j] is a function
     ``eval_fun_derivs[i][j](x1, x2, ..., v1, ... vi, w1, ..., wj)) =
-    d^{i + j}fun / (dx1^i dx2^j) v1 ... vi w1 ... wj``.
-    This array can be used as the `eval_g_derivs` argument to
+    \partial^{i + j}fun / (\partial x1^i \partial x2^j) v1 ... vi w1 ... wj``.
+    Note that ``eval_fun_derivs[0][0]`` evaluates the original function.
+
+    This array is intendted to be used as the `eval_g_derivs` argument to
     `evaluate_term_fwd`.
     """
     eval_fun_derivs = [[ fun ]]
-    for x1_ind in range(order):
+    for x1_ind in range(order1 + 1):
         if x1_ind > 0:
             # Append one x1 derivative.
             next_deriv = _append_jvp(
                 eval_fun_derivs[x1_ind - 1][0], num_base_args=2, argnum=0)
             eval_fun_derivs.append([ next_deriv ])
-        for x2_ind in range(order):
+        for x2_ind in range(order2):
             # Append one x2 derivative.
             next_deriv = _append_jvp(
                 eval_fun_derivs[x1_ind][x2_ind], num_base_args=2, argnum=1)
             eval_fun_derivs[x1_ind].append(next_deriv)
     return eval_fun_derivs
 
+
+class ReverseModeDerivativeArray():
+    def __init__(self, fun, order1, order2):
+        self._order1 = order1
+        self._order2 = order2
+
+        # Build an array of higher order reverse mode partial derivatives.
+        # Traverse the rows (x1 partials) first, then traverse the
+        # columns (x2 partials).
+        self._eval_deriv_arrays = [[ fun ]]
+        for x1_ind in range(self._order1 + 1):
+            if x1_ind > 0:
+                # Append one x1 derivative.
+                next_deriv = autograd.jacobian(
+                    self._eval_deriv_arrays[x1_ind - 1][0], argnum=0)
+                self._eval_deriv_arrays.append([ next_deriv ])
+            for x2_ind in range(self._order2 + 1):
+                # Append one x2 derivative.
+                next_deriv = autograd.jacobian(
+                    self._eval_deriv_arrays[x1_ind][x2_ind], argnum=1)
+                self._eval_deriv_arrays[x1_ind].append(next_deriv)
+
+    def set_evaluation_location(self, x1, x2, force=False):
+        """Set the location at which we evaluate the partial derivatives.
+        """
+
+        x1 = np.atleast_1d(x1)
+        x2 = np.atleast_1d(x2)
+        if x1.ndim != 1 or x2.ndim != 1:
+            raise ValueError('x1 and x2 must be 1d arrays.')
+
+        dim1 = len(x1)
+        dim2 = len(x2)
+        max_array_size = (self._order1 ** dim1) * (self._order2 ** dim2)
+        max_allowed_array_size = 100000
+        if max_array_size > 100000 and not force:
+            err_msg = ('With len(x1) = {}, len(x2) = {}, ' +
+                       'order1 = {}, and order2 = {}, this will create a ' +
+                       'partial derivative array of size {} > {}.  ' +
+                       'To force the creation of these arrays, set' +
+                       '`force=True`.').format(
+                dim1, dim2, self._order1, self._order2,
+                max_array_size, max_allowed_array_size)
+            raise ValueError(err_msg)
+
+        self._x1 = deepcopy(x1)
+        self._x2 = deepcopy(x2)
+        self.deriv_arrays = [[ self._eval_deriv_arrays[0][0](x1, x2) ]]
+        if self.deriv_arrays[0][0].ndim != 1:
+            raise ValueError(
+                'The base function is expected to evaluate to a 1d vector.')
+        for x1_ind in range(self._order1 + 1):
+            if x1_ind > 0:
+                self.deriv_arrays.append([
+                    self._eval_deriv_arrays[x1_ind - 1][0](x1, x2) ])
+            for x2_ind in range(self._order2 + 1):
+                self.deriv_arrays[x1_ind].append([
+                    self._eval_deriv_arrays[x1_ind][x2_ind](x1, x2) ])
+
+    def _check_location(self, x1, x2, tol=1e-8):
+        if (np.max(np.abs(x1 - self._x1)) > tol) or \
+            (np.max(np.abs(x2 - self._x2)) > tol):
+            raise ValueError(
+                'You must use the x1 and x2 set in `set_evaluation_location`.')
+
+    def eval_directional_derivative(self, x1, x2, dx1s, dx2s, check=True):
+        """ok
+        """
+
+        order1 = len(dx1s)
+        order2 = len(dx2s)
+        if check:
+            self._check_location(x1, x2)
+            if order1 > self._order1:
+                raise ValueError(
+                    'The number of `dx1s` () must be <= order1 = {}'.format(
+                        order1, self._order1))
+            if order2 > self._order2:
+                raise ValueError(
+                    'The number of `dx2s` () must be <= order2 = {}'.format(
+                        order1, self._order1))
+
+        # This keeps the first dimension of the partial derivative array,
+        # and sums over the x1 first, then the x2.  This needs to matche the
+        # order in which the partial derivatives are taken in `__init__`.
+
+        # This should be equivalent to the more readable
+        # np.sum(self.deriv_arrays[order1][order2]
+        #        np.hstack(x1, x2)[None:],
+        #        axes=All but the first axis)
+        x1_axes = np.arange(order1)
+        x2_axes = np.arange(order2)
+        print('--------------------')
+        print(x1_axes)
+        print(x2_axes)
+        deriv_array = self.deriv_arrays[order1][order2]
+        print(deriv_array.shape)
+        print(np.array(x1).shape)
+        foo = np.tensordot(
+            deriv_array, np.array(x1),
+            axes=(1 + x1_axes, x1_axes))
+        print(foo.shape)
+        print('--------------------')
+        return np.tensordot(np.tensordot(
+            deriv_array, np.array(x1),
+            axes=(1 + x1_axes, x1_axes)),
+            np.array(x2), axes=(1 + x2_axes, x2_axes))
 
 
 def _consolidate_terms(dterms):
@@ -736,10 +859,10 @@ class ParametricSensitivityTaylorExpansion(object):
 
         # You need one more gradient derivative than the order of the Taylor
         # approximation.
-        # TODO: you could make a reverse mode version of these and everything
-        # else will work the same.
         self._eval_g_derivs = _generate_two_term_fwd_derivative_array(
-            self._objective_function_eta_grad, order=self._order + 1)
+            self._objective_function_eta_grad,
+            order1=self._order + 1,
+            order2=self._order + 2)
 
         self._taylor_terms_list = [ _get_taylor_base_terms() ]
         for k in range(1, self._order):
