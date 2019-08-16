@@ -55,7 +55,7 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
         x2 = np.random.random(dim2)
 
         max_order1 = 2
-        max_order2 = 3
+        max_order2 = 2
         deriv_array = ReverseModeDerivativeArray(
             fun=g, order1=max_order1, order2=max_order2)
         deriv_array.set_evaluation_location(x1, x2)

@@ -650,7 +650,9 @@ class ReverseModeDerivativeArray():
             for i2 in range(self._order2 + 1):
                 total_size += dim0 * (dim1 ** i1) * (dim2 ** i2)
 
-        max_allowed_size = 1000000
+        print('total size: ', total_size)
+
+        max_allowed_size = 100000
         if total_size > max_allowed_size and not force:
             err_msg = ('With len(x1) = {}, len(x2) = {}, ' +
                        'order1 = {}, and order2 = {}, this will create a ' +
@@ -666,10 +668,22 @@ class ReverseModeDerivativeArray():
         if self.deriv_arrays[0][0].ndim != 1:
             raise ValueError(
                 'The base function is expected to evaluate to a 1d vector.')
-        self.deriv_arrays = \
-            [[ self._eval_deriv_arrays[x1_ind][x2_ind](x1, x2)
-               for x2_ind in range(self._order2 + 1)] \
-               for x1_ind in range(self._order1 + 1)]
+
+        print('------------')
+        for x1_ind in range(self._order1 + 1):
+            if x1_ind > 0:
+                self.deriv_arrays.append(
+                    [ self._eval_deriv_arrays[x1_ind][x2_ind](x1, x2) ] )
+            for x2_ind in range(self._order2 + 1):
+                print(x1_ind, x2_ind)
+                self.deriv_arrays[x1_ind].append(
+                    self._eval_deriv_arrays[x1_ind][x2_ind](x1, x2))
+        print('------------')
+
+        # self.deriv_arrays = \
+        #     [[ self._eval_deriv_arrays[x1_ind][x2_ind](x1, x2)
+        #        for x2_ind in range(self._order2 + 1)] \
+        #        for x1_ind in range(self._order1 + 1)]
 
     def _check_location(self, x1, x2, tol=1e-8):
         if (np.max(np.abs(x1 - self._x1)) > tol) or \
