@@ -832,6 +832,14 @@ class ParametricSensitivityTaylorExpansion(object):
         self._max_input_order = max_input_order
         self._max_hyper_order = max_hyper_order
         self._forward_mode = forward_mode
+        if not self._forward_mode:
+            warnings.warn(
+                'Reverse mode Taylor expansions are experimental.')
+
+        if self._max_input_order is not None or \
+           self._max_hyper_order is not None:
+            warnings.warn(
+                'Setting _max_hyper_order or _max_input_order is experimental.')
 
         if self._max_input_order is not None and self._max_input_order < 1:
             raise ValueError('max_input_order must be >= 1.')
