@@ -711,7 +711,7 @@ class TestTaylorExpansion(unittest.TestCase):
     def test_reverse_mode(self):
         # Test with weighted linear regression, which has only one partial
         # derivative with respect to the hyperparameter.
-        n_obs = 100
+        n_obs = 10
         dim = 2
         theta_true = np.array([0.5, -0.1])
         x = np.random.random((n_obs, dim))
@@ -727,31 +727,51 @@ class TestTaylorExpansion(unittest.TestCase):
 
         w1 = np.ones(n_obs)
         theta0 = run_regression(w1)
+        dw = np.random.random(n_obs) - 0.5
 
-        test_order = 3
+        objective_grad = autograd.grad(objective, argnum=0)
+        self.assertTrue(
+            np.linalg.norm(objective_grad(theta0, w1)) < 1e-8)
+        self.assertTrue(
+            np.linalg.norm(objective_grad(
+                run_regression(w1 + dw), w1 + dw)) < 1e-8)
+
         taylor_expansion = \
             sensitivity_lib.ParametricSensitivityTaylorExpansion(
                 objective_function=objective,
                 input_val0=theta0,
                 hyper_val0=w1,
-                order=test_order,
+                order=4,
                 max_hyper_order=1,
+                max_input_order=2,
                 forward_mode=False)
 
         # Get exact derivatives using the closed form.
         dtheta_dw = _append_jvp(run_regression)
         d2theta_dw2 = _append_jvp(dtheta_dw)
         d3theta_dw3 = _append_jvp(d2theta_dw2)
-
-        dw = np.random.random(n_obs) - 0.5
+        d4theta_dw4 = _append_jvp(d3theta_dw3)
 
         d1 = dtheta_dw(w1, dw)
         d2 = d2theta_dw2(w1, dw, dw)
         d3 = d3theta_dw3(w1, dw, dw, dw)
+        d4 = d4theta_dw4(w1, dw, dw, dw, dw)
 
         assert_array_almost_equal(
-            taylor_expansion.evaluate_taylor_series(dw),
-            theta0 + d1 + d2 / 2 + d3 / 6)
+            taylor_expansion.evaluate_taylor_series(w1 + dw, max_order=1),
+            theta0 + d1)
+
+        assert_array_almost_equal(
+            taylor_expansion.evaluate_taylor_series(w1 + dw, max_order=2),
+            theta0 + d1 + d2 / 2.0)
+
+        assert_array_almost_equal(
+            taylor_expansion.evaluate_taylor_series(w1 + dw, max_order=3),
+            theta0 + d1 + d2 / 2.0 + d3 / 6.0)
+
+        assert_array_almost_equal(
+            taylor_expansion.evaluate_taylor_series(w1 + dw, max_order=4),
+            theta0 + d1 + d2 / 2.0 + d3 / 6.0 + d4 / 24.0)
 
 
 if __name__ == '__main__':
