@@ -140,7 +140,18 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
             # set the initial point.
             deriv_array.set_evaluation_location(x1, x2)
 
+        # Check that it works with force.
         deriv_array.set_evaluation_location(x1, x2, force=True, verbose=True)
+
+        deriv_array = ReverseModeDerivativeArray(fun=g, order1=3, order2=3)
+        x1 = np.zeros(2)
+        x2 = np.zeros(2)
+        with self.assertRaises(ValueError):
+            # Both orders are greater than two.
+            deriv_array.set_evaluation_location(x1, x2)
+
+        # Check that it works with force.
+        deriv_array.set_evaluation_location(x1, x2, force=True)
 
     def test_derivative_arrays(self):
         g, x1, x2 = self.get_test_fun(2, 4)
@@ -591,7 +602,6 @@ class TestTaylorExpansion(unittest.TestCase):
         # obj_eps_grad = autograd.grad(objective, argnum=1)
         #obj_eps_hessian = autograd.hessian(objective, argnum=1)
 
-
         eps1 = eps0 + 1e-1
         eta1 = model.get_true_optimal_theta(eps1)
 
@@ -689,7 +699,6 @@ class TestTaylorExpansion(unittest.TestCase):
             taylor_expansion_truth.evaluate_taylor_series(eps1),
             taylor_expansion_test.evaluate_taylor_series(eps1))
 
-
     def test_max_orders(self):
         self._test_max_order(1, 1, 4)
         self._test_max_order(1, 2, 4)
@@ -698,6 +707,9 @@ class TestTaylorExpansion(unittest.TestCase):
         self._test_max_order(1, 3, 4)
         self._test_max_order(3, 1, 4)
 
+
+    def test_reverse_mode(self):
+        pass
 
 if __name__ == '__main__':
     unittest.main()

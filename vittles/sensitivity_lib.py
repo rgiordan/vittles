@@ -680,6 +680,12 @@ class ReverseModeDerivativeArray():
                 total_size, max_allowed_size)
             raise ValueError(err_msg)
 
+        if self._order1 > 2 and self._order2 > 2 and not force:
+            err_msg = ('With both orders greater than two, reverse ' +
+                       'mode can be slow even in low-dimensional problems.  ' +
+                       'To force the creation of the arrays, set force=True.')
+            raise ValueError(err_msg)
+
         # Save the location at which the partial derivatives are evaluated.
         self._x1 = deepcopy(x1)
         self._x2 = deepcopy(x2)
