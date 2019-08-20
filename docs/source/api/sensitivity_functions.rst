@@ -17,19 +17,11 @@ Hyperparameter sensitivity Taylor series approximation
 Sparse Hessians
 ----------------------------
 
-.. autoclass:: vittles.sensitivity_lib.SparseBlockHessian
+.. autoclass:: vittles.sparse_hessian_lib.SparseBlockHessian
   :members:
 
 Linear response covariances
 ----------------------------
 
-.. autoclass:: vittles.sensitivity_lib.LinearResponseCovariances
-  :members:
-
-DerivativeTerm class
----------------------------
-
-This class is used in the internals of ``ParametricSensitivityTaylorExpansion``.
-
-.. autoclass:: vittles.sensitivity_lib.DerivativeTerm
+.. autoclass:: vittles.lr_cov_lib.LinearResponseCovariances
   :members:

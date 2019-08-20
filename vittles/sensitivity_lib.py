@@ -4,232 +4,15 @@
 
 import autograd
 import autograd.numpy as np
+from autograd.core import primitive, defvjp, defjvp
+
 from copy import deepcopy
 from math import factorial
-import scipy as sp
-import scipy.sparse
-from scipy.sparse import coo_matrix
+from string import ascii_lowercase
 import warnings
 
 from paragami import FlattenFunctionInput
 from .solver_lib import SystemSolver
-
-
-##############
-# LRVB class #
-##############
-
-class LinearResponseCovariances:
-    """
-    Calculate linear response covariances of a variational distribution.
-
-    Let :math:`q(\\theta | \\eta)` be a class of probability distribtions on
-    :math:`\\theta` where the class is parameterized by the real-valued vector
-    :math:`\\eta`.  Suppose that we wish to approximate a distribution
-    :math:`q(\\theta | \\eta^*) \\approx p(\\theta)` by solving an optimization
-    problem :math:`\\eta^* = \\mathrm{argmin} f(\\eta)`.  For example, :math:`f`
-    might be a measure of distance between :math:`q(\\theta | \\eta)` and
-    :math:`p(\\theta)`.  This class uses the sensitivity of the optimal
-    :math:`\\eta^*` to estimate the covariance
-    :math:`\\mathrm{Cov}_p(g(\\theta))`. This covariance estimate is called the
-    "linear response covariance".
-
-    In this notation, the arguments to the class mathods are as follows.
-    :math:`f` is ``objective_fun``, :math:`\\eta^*` is ``opt_par_value``, and
-    the function ``calculate_moments`` evaluates :math:`\\mathbb{E}_{q(\\theta |
-    \\eta)}[g(\\theta)]` as a function of :math:`\\eta`.
-
-    Methods
-    ------------
-    set_base_values:
-        Set the base values, :math:`\\eta^*` that optimizes the
-        objective function.
-    get_hessian_at_opt:
-        Return the Hessian of the objective function evaluated at the optimum.
-    get_hessian_cholesky_at_opt:
-        Return the Cholesky decomposition of the Hessian of the objective
-        function evaluated at the optimum.
-    get_lr_covariance:
-        Return the linear response covariance of a given moment.
-    """
-    def __init__(
-        self,
-        objective_fun,
-        opt_par_value,
-        validate_optimum=False,
-        hessian_at_opt=None,
-        factorize_hessian=True,
-        grad_tol=1e-8):
-        """
-        Parameters
-        --------------
-        objective_fun: Callable function
-            A callable function whose optimum parameterizes an approximate
-            Bayesian posterior.  The function must take as a single
-            argument a numeric vector, ``opt_par``.
-        opt_par_value:
-            The value of ``opt_par`` at which ``objective_fun`` is optimized.
-        validate_optimum: Boolean
-            When setting the values of ``opt_par``, check
-            that ``opt_par`` is, in fact, a critical point of
-            ``objective_fun``.
-        hessian_at_opt: Numeric matrix (optional)
-            The Hessian of ``objective_fun`` at the optimum.  If not specified,
-            it is calculated using automatic differentiation.
-        factorize_hessian: Boolean
-            If ``True``, solve the required linear system using a Cholesky
-            factorization.  If ``False``, use the conjugate gradient algorithm
-            to avoid forming or inverting the Hessian.
-        grad_tol: Float
-            The tolerance used to check that the gradient is approximately
-            zero at the optimum.
-        """
-
-        self._obj_fun = objective_fun
-        self._obj_fun_grad = autograd.grad(self._obj_fun, argnum=0)
-        self._obj_fun_hessian = autograd.hessian(self._obj_fun, argnum=0)
-        self._obj_fun_hvp = autograd.hessian_vector_product(
-            self._obj_fun, argnum=0)
-
-        self._grad_tol = grad_tol
-
-        self.set_base_values(
-            opt_par_value, hessian_at_opt,
-            factorize_hessian, validate=validate_optimum)
-
-    def set_base_values(self,
-                        opt_par_value,
-                        hessian_at_opt,
-                        factorize_hessian=True,
-                        validate=True,
-                        grad_tol=None):
-        if grad_tol is None:
-            grad_tol = self._grad_tol
-
-        # Set the values of the optimal parameters.
-        self._opt0 = deepcopy(opt_par_value)
-
-        # Set the values of the Hessian at the optimum.
-        if hessian_at_opt is None:
-            self._hess0 = self._obj_fun_hessian(self._opt0)
-        else:
-            self._hess0 = hessian_at_opt
-
-        method = 'factorization' if factorize_hessian else 'cg'
-        self.hess_solver = SystemSolver(self._hess0, method)
-
-        if validate:
-            # Check that the gradient of the objective is zero at the optimum.
-            grad0 = self._obj_fun_grad(self._opt0)
-            newton_step = -1 * self.hess_solver.solve(grad0)
-
-            newton_step_norm = np.linalg.norm(newton_step)
-            if newton_step_norm > grad_tol:
-                err_msg = \
-                    'The gradient is not zero at the proposed optimal ' + \
-                    'values.  ||newton_step|| = {} > {} = grad_tol'.format(
-                        newton_step_norm, grad_tol)
-                raise ValueError(err_msg)
-
-    # Methods:
-    def get_hessian_at_opt(self):
-        return self._hess0
-
-    def get_lr_covariance_from_jacobians(self,
-                                         moment_jacobian1,
-                                         moment_jacobian2):
-        """
-        Get the linear response covariance between two vectors of moments.
-
-        Parameters
-        ------------
-        moment_jacobian1: 2d numeric array.
-            The Jacobian matrix of a map from a value of
-            ``opt_par`` to a vector of moments of interest.  Following
-            standard notation for Jacobian matrices, the rows should
-            correspond to moments and the columns to elements of
-            a flattened ``opt_par``.
-        moment_jacobian2: 2d numeric array.
-            Like ``moment_jacobian1`` but for the second vector of moments.
-
-        Returns
-        ------------
-        Numeric matrix
-            If ``moment_jacobian1(opt_par)`` is the Jacobian
-            of :math:`\mathbb{E}_q[g_1(\\theta)]` and
-            ``moment_jacobian2(opt_par)``
-            is the Jacobian of  :math:`\mathbb{E}_q[g_2(\\theta)]` then this
-            returns the linear response estimate of
-            :math:`\\mathrm{Cov}_p(g_1(\\theta), g_2(\\theta))`.
-        """
-
-        if moment_jacobian1.ndim != 2:
-            raise ValueError('moment_jacobian1 must be a 2d array.')
-
-        if moment_jacobian2.ndim != 2:
-            raise ValueError('moment_jacobian2 must be a 2d array.')
-
-        if moment_jacobian1.shape[1] != len(self._opt0):
-            err_msg = ('The number of rows of moment_jacobian1 must match' +
-                       'the dimension of the optimization parameter. ' +
-                       'Expected {} rows, but got shape = {}').format(
-                         len(self._opt0), moment_jacobian1.shape)
-            raise ValueError(err_msg)
-
-        if moment_jacobian2.shape[1] != len(self._opt0):
-            err_msg = ('The number of rows of moment_jacobian2 must match' +
-                       'the dimension of the optimization parameter. ' +
-                       'Expected {} rows, but got shape = {}').format(
-                         len(self._opt0), moment_jacobian2.shape)
-            raise ValueError(err_msg)
-
-        # return moment_jacobian1 @ cho_solve(
-        #     self._hess0_chol, moment_jacobian2.T)
-        return moment_jacobian1 @ self.hess_solver.solve(moment_jacobian2.T)
-
-    def get_moment_jacobian(self, calculate_moments):
-        """
-        The Jacobian matrix of a map from ``opt_par`` to a vector of
-        moments of interest.
-
-        Parameters
-        ------------
-        calculate_moments: Callable function
-            A function that takes the folded ``opt_par`` as a single argument
-            and returns a numeric vector containing posterior moments of
-            interest.
-
-        Returns
-        ----------
-        Numeric matrix
-            The Jacobian of the moments.
-        """
-        calculate_moments_jacobian = autograd.jacobian(calculate_moments)
-        return calculate_moments_jacobian(self._opt0)
-
-    def get_lr_covariance(self, calculate_moments):
-        """
-        Get the linear response covariance of a vector of moments.
-
-        Parameters
-        ------------
-        calculate_moments: Callable function
-            A function that takes the folded ``opt_par`` as a single argument
-            and returns a numeric vector containing posterior moments of
-            interest.
-
-        Returns
-        ------------
-        Numeric matrix
-            If ``calculate_moments(opt_par)`` returns
-            :math:`\\mathbb{E}_q[g(\\theta)]`
-            then this returns the linear response estimate of
-            :math:`\\mathrm{Cov}_p(g(\\theta))`.
-        """
-
-        moment_jacobian = self.get_moment_jacobian(calculate_moments)
-        return self.get_lr_covariance_from_jacobians(
-            moment_jacobian, moment_jacobian)
 
 
 class HyperparameterSensitivityLinearApproximation:
@@ -423,6 +206,55 @@ class HyperparameterSensitivityLinearApproximation:
             self._opt0 + \
             self._sens_mat @ (new_hyper_par_value - self._hyper0)
 
+    def _check_hyper_par_value(self, hyper_par, tolerance=1e-8):
+        if np.max(np.abs(hyper_par - self._hyper0)) > tolerance:
+            raise ValueError(
+                'get_opt_par must be evaluated at ',
+                self._hyper0, ' != ', hyper_par)
+
+    def get_opt_par_function(self):
+        """Return a differentiable function returning the optimal value.
+        """
+
+        @primitive
+        def get_opt_par(hyper_par):
+            """Evaluate the optimum as a differentiable function.
+
+            Parameters
+            -------------
+            hyper_par: numeric
+                The value must match `hyper_par_value`, but it can be an
+                array box, allowing functions of the optimal parameter to be
+                differentiated with `autograd`.
+            """
+
+            self._check_hyper_par_value(hyper_par)
+            return self._opt0
+
+        # Reverse mode.
+        def _get_parhat_vjp(ans, hyperpar):
+            self._check_hyper_par_value(hyperpar)
+
+            # Make this primitive to prevent attempting higher-order derivatives.
+            # To do so efficiently will require a higher order approximation.
+            @primitive
+            def vjp(g):
+                return g.T @ self._sens_mat
+            return vjp
+
+        # Forward mode.
+        # Make this primitive to prevent attempting higher-order derivatives.
+        # To do so efficiently will require a higher order approximation.
+        @primitive
+        def _get_parhat_jvp(g, ans, hyperpar):
+            self._check_hyper_par_value(hyperpar)
+            return self._sens_mat @ g
+
+        # Define the derivatives of `get_opt_par`
+        defvjp(get_opt_par, _get_parhat_vjp)
+        defjvp(get_opt_par, _get_parhat_jvp)
+
+        return get_opt_par
 
 ################################
 # Higher-order approximations. #
@@ -571,8 +403,6 @@ class DerivativeTerm:
 
     Methods
     ------------
-    evaluate:
-        Get the value of the current derivative term.
     differentiate:
         Get a list of derivatives terms resulting from differentiating this
         term.
@@ -582,30 +412,22 @@ class DerivativeTerm:
     combine_with:
         Return the sum of this term and another term.
     """
-    def __init__(self, eps_order, eta_orders, prefactor,
-                 eval_g_derivs):
+    def __init__(self, eps_order, eta_orders, prefactor):
         """
         Parameters
         -------------
         eps_order:
-            The total number of epsilon derivatives of g.
+            The total number of epsilon partial derivatives of g.
         eta_orders:
             A vector of length order - 1.  Entry i contains the number
             of terms :math:`d\\eta^{i + 1} / d\\epsilon^{i + 1}`.
         prefactor:
             The constant multiple in front of this term.
-        eval_g_derivs:
-            A list of lists of g jacobian vector product functions.
-            The array should be such that
-            eval_g_derivs[i][j](eta0, eps0, v1 ... vi, w1 ... wj)
-            evaluates d^{i + j} G / (deta^i)(deps^j)(v1 ... vi)(w1 ... wj).
         """
         # Base properties.
         self.eps_order = eps_order
         self.eta_orders = eta_orders
         self.prefactor = prefactor
-        #self._eval_eta_derivs = eval_eta_derivs
-        self._eval_g_derivs = eval_g_derivs
 
         # Derived quantities.
 
@@ -613,10 +435,6 @@ class DerivativeTerm:
         self._order = int(
             self.eps_order + \
             np.sum(self.eta_orders * np.arange(1, len(self.eta_orders) + 1)))
-
-        # The derivative of g needed for this particular term.
-        self.eval_g_deriv = \
-            eval_g_derivs[np.sum(eta_orders)][self.eps_order]
 
         # Sanity checks.
         # The rules of differentiation require that these assertions be true
@@ -629,53 +447,16 @@ class DerivativeTerm:
         for eta_order in self.eta_orders:
             assert eta_order >= 0
             assert isinstance(eta_order, int)
-        # assert len(self._eval_eta_derivs) >= self._order - 1
-        assert len(eval_g_derivs) > len(self.eta_orders)
-        for eta_deriv_list in eval_g_derivs:
-            assert len(eta_deriv_list) > self.eps_order
 
     def __str__(self):
         return 'Order: {}\t{} * eta{} * eps[{}]'.format(
             self._order, self.prefactor, self.eta_orders, self.eps_order)
 
-    def evaluate(self, eta0, eps0, deps, eta_derivs):
-        """Evaluate the DerivativeTerm.
-
-        Parameters
-        ----------------------
-        eta0, eps0 : `numpy.ndarray`
-            Where to evaluate the derivative.
-        deps : `numpy.ndarray`
-            The direction in which to evaluate the derivative.
-        eta_derivs : `list` of `numpy.ndarray`
-            A list where ``eta_derivs[i]`` contains
-            :math:`d\\eta^i / d\\epsilon^i \\Delta \\epsilon^i`.
-        """
-
-        # TODO: this check is best done elsewhere
-        if len(eta_derivs) < self._order - 1:
-            raise ValueError('Not enough derivatives in ``eta_derivs``.')
-
-        # First eta arguments, then epsilons.
-        vec_args = []
-
-        for i in range(len(self.eta_orders)):
-            eta_order = self.eta_orders[i]
-            if eta_order > 0:
-                # vec = self._eval_eta_derivs[i](eta0, eps0, deps)
-                vec = eta_derivs[i]
-                for j in range(eta_order):
-                    vec_args.append(vec)
-
-        for i in range(self.eps_order):
-            vec_args.append(deps)
-
-        return self.prefactor * self.eval_g_deriv(eta0, eps0, *vec_args)
+    def order(self):
+        return self._order
 
     def differentiate(self):
         derivative_terms = []
-        # new_eval_eta_derivs = deepcopy(self._eval_eta_derivs)
-        #new_eval_eta_derivs.append(eval_next_eta_deriv)
 
         old_eta_orders = deepcopy(self.eta_orders)
         old_eta_orders.append(0)
@@ -685,9 +466,7 @@ class DerivativeTerm:
             DerivativeTerm(
                 eps_order=self.eps_order + 1,
                 eta_orders=deepcopy(old_eta_orders),
-                prefactor=self.prefactor,
-                # eval_eta_derivs=new_eval_eta_derivs,
-                eval_g_derivs=self._eval_g_derivs))
+                prefactor=self.prefactor))
 
         # dG / deta.
         new_eta_orders = deepcopy(old_eta_orders)
@@ -696,9 +475,7 @@ class DerivativeTerm:
             DerivativeTerm(
                 eps_order=self.eps_order,
                 eta_orders=new_eta_orders,
-                prefactor=self.prefactor,
-                # eval_eta_derivs=new_eval_eta_derivs,
-                eval_g_derivs=self._eval_g_derivs))
+                prefactor=self.prefactor))
 
         # Derivatives of each d^{i}eta / deps^i term.
         for i in range(len(self.eta_orders)):
@@ -711,9 +488,7 @@ class DerivativeTerm:
                     DerivativeTerm(
                         eps_order=self.eps_order,
                         eta_orders=new_eta_orders,
-                        prefactor=self.prefactor * eta_order,
-                        # eval_eta_derivs=new_eval_eta_derivs,
-                        eval_g_derivs=self._eval_g_derivs))
+                        prefactor=self.prefactor * eta_order))
 
         return derivative_terms
 
@@ -730,44 +505,224 @@ class DerivativeTerm:
         return DerivativeTerm(
             eps_order=self.eps_order,
             eta_orders=self.eta_orders,
-            prefactor=self.prefactor + term.prefactor,
-            # eval_eta_derivs=self._eval_eta_derivs,
-            eval_g_derivs=self._eval_g_derivs)
+            prefactor=self.prefactor + term.prefactor)
 
 
-def _generate_two_term_fwd_derivative_array(fun, order):
-    """
-    Generate an array of JVPs of the two arguments of the target function fun.
+def _evaluate_term_fwd(term, eta0, eps0, deps, eta_derivs,
+                       eval_directional_derivative, validate=False):
+    """Evaluate the DerivativeTerm in forward mode.
 
     Parameters
-    -------------
-    fun: callable function
-        The function to be differentiated.  The first two arguments
-        should be vectors for differentiation, i.e., fun should have signature
-        fun(x1, x2, ...) and return a numeric value.
-     order: integer
-        The maximum order of the derivative to be generated.
-
-    Returns
-    ------------
-    An array of functions where element eval_fun_derivs[i][j] is a function
-    ``eval_fun_derivs[i][j](x1, x2, ..., v1, ... vi, w1, ..., wj)) =
-    d^{i + j}fun / (dx1^i dx2^j) v1 ... vi w1 ... wj``.
+    ----------------------
+    term: `DerivativeTerm`
+        A `DerivativeTerm` object to evaluate.
+    eta0, eps0 : `numpy.ndarray`
+        Where to evaluate the derivative.
+    deps : `numpy.ndarray`
+        The direction in which to evaluate the derivative.
+    eta_derivs : `list` of `numpy.ndarray`
+        A list where ``eta_derivs[i]`` contains
+        :math:`d\\eta^i / d\\epsilon^i \\Delta \\epsilon^i`.
+    eval_directional_derivative:
+        A function matching `eval_directional_derivative` in
+        ForwardModeDerivativeArray.
+    validate: optional `bool`
+        If `True`, run checks for the appropriate sizes of arguments and
+        produce helpful error messages if necessary.
+        Default is `False`.
     """
-    eval_fun_derivs = [[ fun ]]
-    for x1_ind in range(order):
-        if x1_ind > 0:
-            # Append one x1 derivative.
-            next_deriv = _append_jvp(
-                eval_fun_derivs[x1_ind - 1][0], num_base_args=2, argnum=0)
-            eval_fun_derivs.append([ next_deriv ])
-        for x2_ind in range(order):
-            # Append one x2 derivative.
-            next_deriv = _append_jvp(
-                eval_fun_derivs[x1_ind][x2_ind], num_base_args=2, argnum=1)
-            eval_fun_derivs[x1_ind].append(next_deriv)
-    return eval_fun_derivs
 
+    if validate:
+        if len(eta_derivs) < term.order() - 1:
+            raise ValueError('Not enough derivatives in ``eta_derivs``.')
+
+    # First eta arguments, then epsilons.
+    vec_args = []
+
+    eta_directions = []
+    for i in range(len(term.eta_orders)):
+        eta_order = term.eta_orders[i]
+        if eta_order > 0:
+            for j in range(eta_order):
+                eta_directions.append(eta_derivs[i])
+
+    eps_directions = []
+    for i in range(term.eps_order):
+        eps_directions.append(deps)
+
+    return term.prefactor * eval_directional_derivative(
+        eta0, eps0, eta_directions, eps_directions, validate=validate)
+
+
+def _contract_tensor(deriv_array, dx1s, dx2s):
+    """Apply deriv_array to the list of vectors in dx1s and dx2s, keeping the
+    first dimension of deriv_array.
+
+    This is best understood with an example.  Consider:
+
+    >>> deriv_array = np.random.random((3, 4, 4, 2))
+    >>> dx1s = [ np.random.random(4) for _ in range(2) ]
+    >>> dx2s = [ np.random.random(2) for _ in range(1) ]
+
+    We want
+    >>> einsum('zabc,a,b,c->z', deriv_array, dx1s[0], dx1s[1], dx2s[0])
+
+    We construct this automatically for any length vectors.
+    """
+    if len(dx1s) + len(dx2s) >= len(ascii_lowercase):
+        raise ValueError(
+            'You cannot use _contract_tensor with so many vectors ' +
+            'because of the crazy way I decided to do this with einsum.')
+
+    ind_letters =  ascii_lowercase[0:(len(dx1s) + len(dx2s))]
+    einsum_str = \
+        'z' + ''.join(ind_letters) + ',' + ','.join(ind_letters) + '->z'
+    return np.einsum(einsum_str, deriv_array, *(dx1s + dx2s))
+
+
+class ForwardModeDerivativeArray():
+    def __init__(self, fun, order1, order2):
+        self._order1 = order1
+        self._order2 = order2
+
+        self._eval_fun_derivs = [[ fun ]]
+        for x1_ind in range(self._order1 + 1):
+            if x1_ind > 0: # The first row should be 0-th order x1 partials.
+                # Append one x1 derivative.
+                next_deriv = _append_jvp(
+                    self._eval_fun_derivs[x1_ind - 1][0],
+                    num_base_args=2, argnum=0)
+                self._eval_fun_derivs.append([ next_deriv ])
+            for x2_ind in range(self._order2):
+                # Append one x2 derivative.  Note that the array already contains
+                # a 0-th order x2 partial, and we are appending order2 new
+                # derivatives, for a max order of order2 in order2 + 1 columns.
+                next_deriv = _append_jvp(
+                    self._eval_fun_derivs[x1_ind][x2_ind],
+                    num_base_args=2, argnum=1)
+                self._eval_fun_derivs[x1_ind].append(next_deriv)
+
+    def eval_directional_derivative(self, x1, x2, dx1s, dx2s, validate=True):
+        """Evaluate the directional derivative in the directions
+        dx1s[0] ..., dx1s[N_1], dx2s[0], ..., dx2s[N_2].
+        """
+
+        order1 = len(dx1s)
+        order2 = len(dx2s)
+        if validate:
+            if order1 > self._order1:
+                raise ValueError(
+                    'The number of `dx1s` () must be <= order1 = {}'.format(
+                        order1, self._order1))
+            if order2 > self._order2:
+                raise ValueError(
+                    'The number of `dx2s` () must be <= order2 = {}'.format(
+                        order1, self._order1))
+            if (not isinstance(dx1s, list)) or (not isinstance(dx2s, list)):
+                raise ValueError('`dx1s` and `dx2s` must be lists of vectors.')
+
+        return self._eval_fun_derivs[order1][order2](x1, x2, *[*dx1s, *dx2s])
+
+
+class ReverseModeDerivativeArray():
+    def __init__(self, fun, order1, order2):
+        self._order1 = order1
+        self._order2 = order2
+
+        # Build an array of higher order reverse mode partial derivatives.
+        # Traverse the rows (x1 partials) first, then traverse the
+        # columns (x2 partials).
+        self._eval_deriv_arrays = [[ fun ]]
+        for x1_ind in range(self._order1 + 1):
+            if x1_ind > 0:
+                # Append one x1 derivative.
+                next_deriv = autograd.jacobian(
+                    self._eval_deriv_arrays[x1_ind - 1][0], argnum=0)
+                self._eval_deriv_arrays.append([ next_deriv ])
+            for x2_ind in range(self._order2):
+                # Append one x2 derivative.  Note that the array already has
+                # a 0-th order x2 partial, and we are appending order2 new
+                # derivatives, for a max order of order2 in order2 + 1 columns.
+                next_deriv = autograd.jacobian(
+                    self._eval_deriv_arrays[x1_ind][x2_ind], argnum=1)
+                self._eval_deriv_arrays[x1_ind].append(next_deriv)
+
+    def set_evaluation_location(self, x1, x2, force=False, verbose=False):
+        """Set the location at which we evaluate the partial derivatives.
+        """
+
+        x1 = np.atleast_1d(x1)
+        x2 = np.atleast_1d(x2)
+        if x1.ndim != 1 or x2.ndim != 1:
+            raise ValueError('x1 and x2 must be 1d arrays.')
+
+        self.deriv_arrays = \
+            [[ np.atleast_1d(self._eval_deriv_arrays[0][0](x1, x2)) ]]
+        dim0 = len(self.deriv_arrays[0][0])
+        dim1 = len(x1)
+        dim2 = len(x2)
+        total_size = 0
+        for i1 in range(self._order1 + 1):
+            for i2 in range(self._order2 + 1):
+                total_size += dim0 * (dim1 ** i1) * (dim2 ** i2)
+
+        max_allowed_size = 100000
+        if total_size > max_allowed_size and not force:
+            err_msg = ('With len(x1) = {}, len(x2) = {}, ' +
+                       'order1 = {}, and order2 = {}, this will create a ' +
+                       'partial derivative array of size {} > {}.  ' +
+                       'To force the creation of these arrays, set' +
+                       '`force=True`.').format(
+                dim1, dim2, self._order1, self._order2,
+                total_size, max_allowed_size)
+            raise ValueError(err_msg)
+
+        # Save the location at which the partial derivatives are evaluated.
+        self._x1 = deepcopy(x1)
+        self._x2 = deepcopy(x2)
+        if self.deriv_arrays[0][0].ndim != 1:
+            raise ValueError(
+                'The base function is expected to evaluate to a 1d vector.')
+
+        self.deriv_arrays = \
+            [[ None for _ in range(self._order2 + 1)] \
+                for _ in range(self._order1 + 1)]
+        for x1_ind in range(self._order1 + 1):
+            for x2_ind in range(self._order2 + 1):
+                if verbose:
+                    print('Evaluating the derivative {}, {}'.format(
+                        x1_ind, x2_ind))
+                self.deriv_arrays[x1_ind][x2_ind] = \
+                    self._eval_deriv_arrays[x1_ind][x2_ind](x1, x2)
+
+    def _check_location(self, x1, x2, tol=1e-8):
+        if (np.max(np.abs(x1 - self._x1)) > tol) or \
+            (np.max(np.abs(x2 - self._x2)) > tol):
+            raise ValueError(
+                'You must use the x1 and x2 set in `set_evaluation_location`.')
+
+    def eval_directional_derivative(self, x1, x2, dx1s, dx2s, validate=True):
+        """Evaluate the directional derivative in the directions
+        dx1s[0] ..., dx1s[N_1], dx2s[0], ..., dx2s[N_2].
+        """
+
+        order1 = len(dx1s)
+        order2 = len(dx2s)
+        if validate:
+            self._check_location(x1, x2)
+            if order1 > self._order1:
+                raise ValueError(
+                    'The number of `dx1s` () must be <= order1 = {}'.format(
+                        order1, self._order1))
+            if order2 > self._order2:
+                raise ValueError(
+                    'The number of `dx2s` () must be <= order2 = {}'.format(
+                        order1, self._order1))
+
+        # This keeps the first dimension of the partial derivative array,
+        # and sums over the x1 first, then the x2.  This needs to match the
+        # order in which the partial derivatives are taken in `__init__`.
+        return _contract_tensor(self.deriv_arrays[order1][order2], dx1s, dx2s)
 
 
 def _consolidate_terms(dterms):
@@ -798,18 +753,16 @@ def _consolidate_terms(dterms):
 
 
 # Get the terms to start a Taylor expansion.
-def _get_taylor_base_terms(eval_g_derivs):
+def _get_taylor_base_terms():
     dterms1 = [ \
         DerivativeTerm(
             eps_order=1,
             eta_orders=[0],
-            prefactor=1.0,
-            eval_g_derivs=eval_g_derivs),
+            prefactor=1.0),
         DerivativeTerm(
             eps_order=0,
             eta_orders=[1],
-            prefactor=1.0,
-            eval_g_derivs=eval_g_derivs) ]
+            prefactor=1.0) ]
     return dterms1
 
 
@@ -853,8 +806,7 @@ class ParametricSensitivityTaylorExpansion(object):
             necessary calculations can be more efficient.  If
             unset, ``objective_function`` is used.
         """
-        warnings.warn(
-            'The ParametricSensitivityTaylorExpansion is experimental.')
+
         self._objective_function = objective_function
         self._objective_function_hessian = \
             autograd.hessian(self._objective_function, argnum=0)
@@ -917,11 +869,12 @@ class ParametricSensitivityTaylorExpansion(object):
 
         # You need one more gradient derivative than the order of the Taylor
         # approximation.
-        self._eval_g_derivs = _generate_two_term_fwd_derivative_array(
-            self._objective_function_eta_grad, order=self._order + 1)
+        self._deriv_array = ForwardModeDerivativeArray(
+            self._objective_function_eta_grad,
+            order1=self._order + 1,
+            order2=self._order + 2)
 
-        self._taylor_terms_list = \
-            [ _get_taylor_base_terms(self._eval_g_derivs) ]
+        self._taylor_terms_list = [ _get_taylor_base_terms() ]
         for k in range(1, self._order):
             next_taylor_terms = \
                 self._differentiate_terms(self._taylor_terms_list[k - 1])
@@ -962,11 +915,14 @@ class ParametricSensitivityTaylorExpansion(object):
             # we are trying to calculate.
             if (term.eta_orders[-1] == 0):
                 vec += \
-                    term.evaluate(
+                    _evaluate_term_fwd(
+                        term=term,
                         eta0=self._input_val0,
                         eps0=self._hyper_val0,
                         deps=dhyper,
-                        eta_derivs=input_derivs)
+                        eta_derivs=input_derivs,
+                        eval_directional_derivative= \
+                            self._deriv_array.eval_directional_derivative)
         return -1 * self.hess_solver.solve(vec)
 
 
@@ -1070,163 +1026,3 @@ class ParametricSensitivityTaylorExpansion(object):
                 print('\nTerms for order {}:'.format(order + 1))
                 for term in self._taylor_terms_list[order]:
                     print(term)
-
-
-class SparseBlockHessian():
-    """Efficiently calculate block-sparse Hessians.
-
-        The objective function is expected to be of the form
-
-        .. math ::
-            x = (x_1 , ... , x_G) \\textrm{ (or some permutation thereof)}
-
-            f(x) = \sum_{g=1}^{G} f_g(x_g)
-
-        Each :math:`x_g` is
-        expected to have the same dimension.  Consequently, the Hessian
-        matrix of ``f`` with respect to ``x``, is block diagonal with
-        ``G`` blocks, up to a permutation of the order of ``x``.
-        The purpose of this class is to efficiently calculate
-        this Hessian when the block structure (i.e., the partition of ``x``)
-        is known.
-
-    """
-    def __init__(self, objective_function, sparsity_array):
-        """In terms of the class description, ``objective_function = f``,
-        ``opt_par = x``, and ``sparsity_array`` describes
-        the partition of ``x`` into :math:`(x_1, ..., x_G)`.
-
-        Parameters
-        ------------
-        objective_function : `callable`
-            An objective function of which to calculate a Hessian.   The
-            argument should be
-
-            - ``opt_par``: `numpy.ndarray` (N,) The optimization parameter.
-
-        sparsity_array : `numpy.ndarray` (G, M)
-            An array containing the indices of rows and columns of each block.
-            The Hessian should contain ``G`` dense blocks, each of which
-            is ``M`` by ``M``.  Each row of ``sparsity_array`` should contain
-            the indices of the corresponding block.  There must be no repeated
-            indices, and each block must be the same size.
-        """
-        self._fun = objective_function
-        self._sparsity_array = sparsity_array
-        self._num_blocks = self._sparsity_array.shape[0]
-        self._block_size = self._sparsity_array.shape[1]
-
-        if len(np.unique(sparsity_array)) != len(sparsity_array.flatten()):
-            raise ValueError(
-                'The indices in ``sparsity array`` must be unique.')
-
-        self._f_grad = autograd.grad(self._fun, argnum=0)
-        self._f_fwd_hess = _append_jvp(self._f_grad, num_base_args=1)
-
-    def _hess_summed_term(self, opt_par, ib):
-        """``ib`` is the index within the block.
-        """
-        v = np.zeros_like(opt_par)
-        v[self._sparsity_array[:, ib]] = 1
-        return self._f_fwd_hess(opt_par, v)
-
-    def get_block_hessian(self, opt_par, print_every=0):
-        """Get the block Hessian at ``opt_par`` and ``weights``.
-
-        Parmeters
-        ----------
-        opt_par : `numpy.ndarray`
-            The argument to ``objective_function`` at which to evaluate
-            the Hessian matrix.
-        print_every : `int`, optional.
-            How often to display progress.  If ``0``, nothing is printed.
-
-        Returns
-        --------
-        hessian : `scipy.sparse.coo_matrix` (N, N)
-            The block-sparse Hessian given by and ``sparsity_array``.
-        """
-        opt_par = np.atleast_1d(opt_par)
-        if opt_par.ndim != 1:
-            raise ValueError('``opt_par`` must be a vector.')
-
-        mat_vals = [] # These will be the entries of the Hessian
-        mat_rows = [] # These will be the row indices
-        mat_cols = [] # These will be the column indices
-
-        for ib in range(self._block_size):
-            if print_every > 0:
-                if ib % print_every == 0:
-                    print('Block index {} of {}.'.format(ib, self._block_size))
-            hess_prod = self._hess_summed_term(opt_par, ib)
-            for b in range(self._num_blocks):
-                hess_inds = self._sparsity_array[b, :]
-                mat_vals.extend(hess_prod[hess_inds])
-                mat_rows.extend(hess_inds)
-                mat_cols.extend(np.full(self._block_size, hess_inds[ib]))
-        if print_every > 0:
-            print('Done differentiating.')
-
-        d = len(opt_par)
-        h_sparse = coo_matrix((mat_vals, (mat_rows, mat_cols)), (d, d))
-        return h_sparse
-
-    def get_global_hessian(self, opt_par, global_inds=None, print_every=0):
-        """Get the dense Hessian terms for the global parameters, which
-        are, by default, indexed by any indices not in ``_sparsity_array``.
-        """
-        local_inds = np.hstack(self._sparsity_array)
-        if global_inds is None:
-            global_inds = np.setdiff1d(np.arange(len(opt_par)), local_inds)
-
-        global_local_intersection = np.intersect1d(global_inds, local_inds)
-        if len(global_local_intersection) > 0:
-            raise ValueError(
-                'The global and local indices must be disjoint.  {}'.format(
-                    global_local_intersection))
-
-        mat_vals = [] # These will be the entries of the Hessian
-        mat_rows = [] # These will be the row indices
-        mat_cols = [] # These will be the column indices
-
-        v = np.zeros_like(opt_par)
-        count = 0
-        for ig in global_inds:
-            if print_every > 0:
-                if count % print_every == 0:
-                    print('Global index {} of {}.'.format(
-                        count, len(global_inds)))
-            v[ig] = 1
-            hess_row = self._f_fwd_hess(opt_par, v)
-            for il in local_inds:
-                mat_vals.append(hess_row[il])
-                mat_cols.append(ig)
-                mat_rows.append(il)
-
-                mat_vals.append(hess_row[il])
-                mat_cols.append(il)
-                mat_rows.append(ig)
-
-            for ig2 in global_inds:
-                mat_vals.append(0.5 * hess_row[ig2])
-                mat_cols.append(ig)
-                mat_rows.append(ig2)
-
-                mat_vals.append(0.5 * hess_row[ig2])
-                mat_cols.append(ig2)
-                mat_rows.append(ig)
-
-            v[ig] = 0
-            count += 1
-
-        if print_every > 0:
-            print('Done differentiating.')
-
-        d = len(opt_par)
-        h_sparse = coo_matrix((mat_vals, (mat_rows, mat_cols)), (d, d))
-        return h_sparse
-
-    def get_hessian(self, opt_par, print_every=0):
-        local_hessian = self.get_block_hessian(opt_par, print_every=print_every)
-        global_hessian = self.get_global_hessian(opt_par, print_every=print_every)
-        return local_hessian + global_hessian

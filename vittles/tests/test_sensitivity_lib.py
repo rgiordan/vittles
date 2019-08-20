@@ -2,6 +2,7 @@
 
 import autograd
 import autograd.numpy as np
+
 from copy import deepcopy
 import itertools
 from numpy.testing import assert_array_almost_equal
@@ -9,11 +10,15 @@ import paragami
 import scipy as sp
 from test_utils import QuadraticModel
 import unittest
+import time
 import warnings
 
 import vittles
 from vittles import sensitivity_lib
 from vittles import solver_lib
+from vittles.sensitivity_lib import \
+    _append_jvp, _evaluate_term_fwd, DerivativeTerm, \
+    ReverseModeDerivativeArray, ForwardModeDerivativeArray
 
 class TestSystemSolver(unittest.TestCase):
     def test_solver(self):
@@ -37,127 +42,345 @@ class TestSystemSolver(unittest.TestCase):
             h_solver.solve(v)
 
 
-class TestLinearResponseCovariances(unittest.TestCase):
-    def test_lr(self):
-        np.random.seed(42)
+class TestForwardModederivativeArray(unittest.TestCase):
+    def test_fwd_derivative_array(self):
+        model = QuadraticModel(dim=3)
 
-        dim = 4
-        mfvb_par_pattern = paragami.PatternDict()
-        mfvb_par_pattern['mean'] = paragami.NumericArrayPattern((dim, ))
-        mfvb_par_pattern['var'] = paragami.NumericArrayPattern((dim, ))
+        eta0, eps0 = model.get_default_flat_values(True, True)
+        objective = model.get_flat_objective(True, True)
+        obj_eta_grad = autograd.grad(objective, argnum=0)
 
-        mfvb_par = mfvb_par_pattern.empty(valid=True)
+        max_order1 = 2
+        max_order2 = 3
+        deriv_array = ForwardModeDerivativeArray(
+            obj_eta_grad, max_order1, max_order2)
 
-        true_mean = np.arange(0, dim)
-        true_cov = dim * np.eye(dim) + np.outer(true_mean, true_mean)
-        true_info = np.linalg.inv(true_cov)
+        # n^th order derivatives require n + 1 entries, because the
+        # 0-th order is included as well.
+        self.assertEqual(max_order1 + 1, len(deriv_array._eval_fun_derivs))
+        for i in range(len(deriv_array._eval_fun_derivs)):
+            self.assertEqual(
+                max_order2 + 1,
+                len(deriv_array._eval_fun_derivs[i]))
 
-        def get_kl(mfvb_par):
-            """
-            This is :math:`KL(q(\\theta) || p(\\theta))`` where
-            :math:`p(\\theta)` is normal with mean ``true_mean``
-            and inverse covariance ``ture_info`` and the variational
-            distribution :math:`q` is given by ``mfvb_par``.
-            The result is only up to constants that do not depend on
-            :math:`q`.
-            """
+        # Use autodiff's forward mode to check.
+        dg_deta = sensitivity_lib._append_jvp(
+            obj_eta_grad, num_base_args=2, argnum=0)
+        dg_deps = sensitivity_lib._append_jvp(
+            obj_eta_grad, num_base_args=2, argnum=1)
+        d2g_deta_deta = sensitivity_lib._append_jvp(
+            dg_deta, num_base_args=2, argnum=0)
+        d2g_deta_deps = sensitivity_lib._append_jvp(
+            dg_deta, num_base_args=2, argnum=1)
+        d2g_deps_deta = sensitivity_lib._append_jvp(
+            dg_deps, num_base_args=2, argnum=0)
+        d2g_deps_deps = sensitivity_lib._append_jvp(
+            dg_deps, num_base_args=2, argnum=1)
 
-            t_centered = mfvb_par['mean'] - true_mean
-            e_log_p = -0.5 * (
-                np.trace(true_info @ np.diag(mfvb_par['var'])) +
-                t_centered.T @ true_info @ t_centered)
-            q_ent = 0.5 * np.sum(np.log(mfvb_par['var']))
+        # Directions in eta
+        v = [ np.random.random(len(eta0)) for _ in range(max_order1) ]
 
-            return -1 * (q_ent + e_log_p)
+        # Directions in eps
+        w = [ np.random.random(len(eps0)) for _ in range(max_order2) ]
 
-        par_free = True
-        init_hessian = True
+        # Test the array entries
+        assert_array_almost_equal(
+            obj_eta_grad(eta0, eps0),
+            deriv_array.eval_directional_derivative(eta0, eps0, [], []))
 
-        for par_free, init_hessian in \
-            itertools.product([False, True], [False, True]):
+        assert_array_almost_equal(
+            dg_deta(eta0, eps0, v[0]),
+            deriv_array.eval_directional_derivative(
+                eta0, eps0, [v[0]], []))
 
-            get_kl_flat = paragami.FlattenFunctionInput(
-                original_fun=get_kl, patterns=mfvb_par_pattern, free=par_free)
-            get_kl_flat_grad = autograd.grad(get_kl_flat, argnum=0)
-            get_kl_flat_hessian = autograd.hessian(get_kl_flat, argnum=0)
+        assert_array_almost_equal(
+            dg_deps(eta0, eps0, w[0]),
+            deriv_array.eval_directional_derivative(
+                eta0, eps0, [], [w[0]]))
 
-            # This is the optimum.
-            mfvb_par['mean'] = true_mean
-            mfvb_par['var'] = 1 / np.diag(true_info)
-            mfvb_par_flat = mfvb_par_pattern.flatten(mfvb_par, free=par_free)
+        assert_array_almost_equal(
+            d2g_deta_deta(eta0, eps0, v[0], v[1]),
+            deriv_array.eval_directional_derivative(
+                eta0, eps0, [v[0], v[1]], []))
 
-            hess0 = get_kl_flat_hessian(mfvb_par_flat)
+        assert_array_almost_equal(
+            d2g_deta_deps(eta0, eps0, v[0], w[0]),
+            deriv_array.eval_directional_derivative(
+                eta0, eps0, [v[0]], [w[0]]))
 
-            # Sanity check.the optimum.
-            assert_array_almost_equal(
-                0., np.linalg.norm(get_kl_flat_grad(mfvb_par_flat)))
+        assert_array_almost_equal(
+            d2g_deps_deps(eta0, eps0, w[0], w[1]),
+            deriv_array.eval_directional_derivative(
+                eta0, eps0, [], [w[0], w[1]]))
 
-            if init_hessian:
-                lr_covs = vittles.LinearResponseCovariances(
-                    objective_fun=get_kl_flat,
-                    opt_par_value=mfvb_par_flat,
-                    validate_optimum=True,
-                    hessian_at_opt=hess0,
-                    grad_tol=1e-15)
-            else:
-                lr_covs = vittles.LinearResponseCovariances(
-                    objective_fun=get_kl_flat,
-                    opt_par_value=mfvb_par_flat,
-                    validate_optimum=True,
-                    grad_tol=1e-15)
 
-            assert_array_almost_equal(hess0, lr_covs.get_hessian_at_opt())
+class TestReverseModeDerivativeArray(unittest.TestCase):
+    def get_test_fun(self, dim1, dim2):
+        a1 = np.random.random(dim1)
+        a2 = np.random.random(dim2)
+        def f(x1, x2):
+            return np.sin(np.dot(a1, x1) + np.dot(a2, x2))
 
-            get_mean_flat = paragami.FlattenFunctionInput(
-                lambda mfvb_par: mfvb_par['mean'],
-                patterns=mfvb_par_pattern,
-                free=par_free)
-            theta_lr_cov = lr_covs.get_lr_covariance(get_mean_flat)
+        g = autograd.grad(f, argnum=0)
 
-            # The LR covariance is exact for the multivariate normal.
-            assert_array_almost_equal(true_cov, theta_lr_cov)
-            moment_jac = lr_covs.get_moment_jacobian(get_mean_flat)
-            assert_array_almost_equal(
-                theta_lr_cov,
-                lr_covs.get_lr_covariance_from_jacobians(
-                    moment_jac, moment_jac))
+        x1 = np.random.random(dim1)
+        x2 = np.random.random(dim2)
 
-            # Check cross-covariances.
-            get_mean01_flat = paragami.FlattenFunctionInput(
-                lambda mfvb_par: mfvb_par['mean'][0:2],
-                patterns=mfvb_par_pattern,
-                free=par_free)
-            get_mean23_flat = paragami.FlattenFunctionInput(
-                lambda mfvb_par: mfvb_par['mean'][2:4],
-                patterns=mfvb_par_pattern,
-                free=par_free)
-            moment01_jac = lr_covs.get_moment_jacobian(get_mean01_flat)
-            moment23_jac = lr_covs.get_moment_jacobian(get_mean23_flat)
-            assert_array_almost_equal(
-                theta_lr_cov[0:2, 2:4],
-                lr_covs.get_lr_covariance_from_jacobians(
-                    moment01_jac, moment23_jac))
+        return g, x1, x2
 
-            # Check that you get an error when passing in a Jacobian with the
-            # wrong dimension.
-            self.assertRaises(
-                ValueError,
-                lambda: lr_covs.get_lr_covariance_from_jacobians(
-                                    moment_jac.T, moment_jac))
+    def test_warning(self):
+        def g(x1, x2):
+            return 0.
 
-            self.assertRaises(
-                ValueError,
-                lambda: lr_covs.get_lr_covariance_from_jacobians(
-                                    moment_jac, moment_jac.T))
+        deriv_array = ReverseModeDerivativeArray(fun=g, order1=2, order2=2)
+        x1 = np.zeros(1)
+        x2 = np.zeros(1000)
+        with self.assertRaises(ValueError):
+            # 100^2 * 100^2 > 1e6, and should throw an error when you try to
+            # set the initial point.
+            deriv_array.set_evaluation_location(x1, x2)
 
-            self.assertRaises(
-                ValueError,
-                lambda: lr_covs.get_lr_covariance_from_jacobians(
-                                    moment_jac[:, :, None], moment_jac))
-            self.assertRaises(
-                ValueError,
-                lambda: lr_covs.get_lr_covariance_from_jacobians(
-                                    moment_jac, moment_jac[:, :, None]))
+        deriv_array.set_evaluation_location(x1, x2, force=True, verbose=True)
+
+    def test_derivative_arrays(self):
+        g, x1, x2 = self.get_test_fun(2, 4)
+
+        max_order1 = 2
+        max_order2 = 2
+        deriv_array = ReverseModeDerivativeArray(
+            fun=g, order1=max_order1, order2=max_order2)
+        deriv_array.set_evaluation_location(x1, x2)
+
+        self.assertEqual(
+            max_order1 + 1,
+            len(deriv_array._eval_deriv_arrays))
+        for i in range(max_order1 + 1):
+            self.assertEqual(
+                max_order2 + 1,
+                len(deriv_array._eval_deriv_arrays[i]))
+
+        # Check the first couple deriv_arrays by hand.
+        assert_array_almost_equal(
+            g(x1, x2),
+            deriv_array.deriv_arrays[0][0])
+
+        assert_array_almost_equal(
+            autograd.jacobian(g, argnum=0)(x1, x2),
+            deriv_array.deriv_arrays[1][0])
+
+        assert_array_almost_equal(
+            autograd.jacobian(g, argnum=1)(x1, x2),
+            deriv_array.deriv_arrays[0][1])
+
+    def test_evaluate_directional_derivative(self):
+        g, x1, x2 = self.get_test_fun(2, 4)
+
+        max_order1 = 2
+        max_order2 = 2
+        deriv_array = ReverseModeDerivativeArray(
+            fun=g, order1=max_order1, order2=max_order2)
+        deriv_array.set_evaluation_location(x1, x2)
+
+        dx1s = [ np.random.random(len(x1)) \
+                 for _ in range(max_order1) ]
+        dx2s = [ np.random.random(len(x2)) \
+                 for _ in range(max_order2 - 1) ]
+
+        deriv = deriv_array.eval_directional_derivative(x1, x2, dx1s, dx2s)
+
+        # Check accuracy against _append_jvp.
+        eval_forward_deriv = g
+        for _ in range(len(dx1s)):
+            eval_forward_deriv = \
+                _append_jvp(eval_forward_deriv, num_base_args=2, argnum=0)
+        for _ in range(len(dx2s)):
+            eval_forward_deriv = \
+                _append_jvp(eval_forward_deriv, num_base_args=2, argnum=1)
+        assert_array_almost_equal(
+            eval_forward_deriv(x1, x2, *(dx1s + dx2s)),
+            deriv)
+
+        # Test the errors.
+        with self.assertRaises(ValueError):
+            deriv_array.eval_directional_derivative(x1 + 0.1, x2, dx1s, dx2s)
+
+        with self.assertRaises(ValueError):
+            deriv_array.eval_directional_derivative(x1, x2 + 0.1, dx1s, dx2s)
+
+
+class TestAppendJVP(unittest.TestCase):
+    def test_append_jvp(self):
+        eta_is_free = True
+        eps_is_free = True
+        model = QuadraticModel(dim=3)
+
+        objective = model.get_flat_objective(eta_is_free, eps_is_free)
+        eta0, eps0 = model.get_default_flat_values(eta_is_free, eps_is_free)
+
+        # Use the reverse mode derivatives as ground truth.
+        obj_eta_grad = autograd.grad(objective, argnum=0)
+        obj_eps_grad = autograd.grad(objective, argnum=1)
+        obj_eta_hessian = autograd.hessian(objective, argnum=0)
+        obj_eps_hessian = autograd.hessian(objective, argnum=1)
+        get_dobj_deta_deps = autograd.jacobian(
+            autograd.jacobian(objective, argnum=0), argnum=1)
+
+        dobj_deta = sensitivity_lib._append_jvp(
+            objective, num_base_args=2, argnum=0)
+        d2obj_deta_deta = sensitivity_lib._append_jvp(
+            dobj_deta, num_base_args=2, argnum=0)
+
+        v1 = np.random.random(len(eta0))
+        v2 = np.random.random(len(eta0))
+        v3 = np.random.random(len(eta0))
+        w1 = np.random.random(len(eps0))
+        w2 = np.random.random(len(eps0))
+        w3 = np.random.random(len(eps0))
+
+        hess0 = obj_eta_hessian(eta0, eps0)
+
+        # Check the first argument
+        assert_array_almost_equal(
+            np.einsum('i,i', obj_eta_grad(eta0, eps0), v1),
+            dobj_deta(eta0, eps0, v1))
+        assert_array_almost_equal(
+            np.einsum('ij,i,j', obj_eta_hessian(eta0, eps0), v1, v2),
+            d2obj_deta_deta(eta0, eps0, v1, v2))
+
+        # Check the second argument
+        dobj_deps = sensitivity_lib._append_jvp(
+            objective, num_base_args=2, argnum=1)
+        d2obj_deps_deps = sensitivity_lib._append_jvp(
+            dobj_deps, num_base_args=2, argnum=1)
+
+        assert_array_almost_equal(
+            np.einsum('i,i', obj_eps_grad(eta0, eps0), w1),
+            dobj_deps(eta0, eps0, w1))
+
+        assert_array_almost_equal(
+            np.einsum('ij,i,j', obj_eps_hessian(eta0, eps0), w1, w2),
+            d2obj_deps_deps(eta0, eps0, w1, w2))
+
+        # Check mixed arguments
+        d2obj_deps_deta = sensitivity_lib._append_jvp(
+            dobj_deps, num_base_args=2, argnum=0)
+        d2obj_deta_deps = sensitivity_lib._append_jvp(
+            dobj_deta, num_base_args=2, argnum=1)
+
+        assert_array_almost_equal(
+            d2obj_deps_deta(eta0, eps0, v1, w1),
+            d2obj_deta_deps(eta0, eps0, w1, v1))
+
+        assert_array_almost_equal(
+            np.einsum('ij,i,j', get_dobj_deta_deps(eta0, eps0), v1, w1),
+            d2obj_deps_deta(eta0, eps0, v1, w1))
+
+        # Check derivatives of vectors.
+        dg_deta = sensitivity_lib._append_jvp(
+            obj_eta_grad, num_base_args=2, argnum=0)
+
+        assert_array_almost_equal(
+            hess0 @ v1, dg_deta(eta0, eps0, v1))
+
+
+class TestDerivativeTerm(unittest.TestCase):
+    def test_differentiate(self):
+        dterm = DerivativeTerm(
+            eps_order=2,
+            eta_orders=[1, 0, 0],
+            prefactor=1.7)
+
+        dterms = dterm.differentiate()
+
+        # We expect three terms:
+        # Order: 4	1.7 * eta[1, 0, 0, 0] * eps[3]
+        # Order: 4	1.7 * eta[2, 0, 0, 0] * eps[2]
+        # Order: 4	1.7 * eta[0, 1, 0, 0] * eps[2]
+        self.assertEqual(3, len(dterms))
+        term1_found = False
+        term2_found = False
+        term3_found = False
+        for term in dterms:
+            if term.check_similarity(
+                DerivativeTerm(3, [1, 0, 0, 0], 1.7)):
+                term1_found = True
+            elif term.check_similarity(
+                DerivativeTerm(2, [2, 0, 0, 0], 1.7)):
+                term2_found = True
+            elif term.check_similarity(
+                DerivativeTerm(2, [0, 1, 0, 0], 1.7)):
+                term3_found = True
+        self.assertTrue(term1_found and term2_found and term3_found)
+
+
+    def test_consolidate_terms(self):
+        dterms = [
+            DerivativeTerm(
+                eps_order=2,
+                eta_orders=[0, 0],
+                prefactor=1.5),
+            DerivativeTerm(
+                eps_order=1,
+                eta_orders=[1, 0],
+                prefactor=2),
+            DerivativeTerm(
+                eps_order=1,
+                eta_orders=[1, 0],
+                prefactor=3) ]
+
+        dterms_combined = sensitivity_lib._consolidate_terms(dterms)
+        self.assertEqual(3, len(dterms))
+        self.assertEqual(2, len(dterms_combined))
+
+    def test_evaluate_derivative_term(self):
+        model = QuadraticModel(dim=3)
+
+        eta0, eps0 = model.get_default_flat_values(True, True)
+        objective = model.get_flat_objective(True, True)
+        get_true_optimal_flat_theta = \
+            model.get_flat_true_optimal_theta(True, True)
+
+        obj_eta_grad = autograd.grad(objective, argnum=0)
+        deriv_array = \
+            ForwardModeDerivativeArray(obj_eta_grad, order1=2, order2=2)
+        eval_directional_derivative = \
+            deriv_array.eval_directional_derivative
+
+        eps1 = eps0 + 1e-1
+        eta1 = get_true_optimal_flat_theta(eps1)
+        deps = eps1 - eps0
+
+        # Get true derivatives.
+        true_deta_deps = autograd.jacobian(get_true_optimal_flat_theta)
+
+        # Use autodiff's forward mode to check.
+        dg_deta = sensitivity_lib._append_jvp(
+            obj_eta_grad, num_base_args=2, argnum=0)
+        dg_deps = sensitivity_lib._append_jvp(
+            obj_eta_grad, num_base_args=2, argnum=1)
+        d2g_deta_deps = sensitivity_lib._append_jvp(
+            dg_deta, num_base_args=2, argnum=1)
+
+        dterm = DerivativeTerm(
+            eps_order=1,
+            eta_orders=[1, 0],
+            prefactor=1.5)
+
+        eta_derivs = [ true_deta_deps(eps0) @ deps ]
+        assert_array_almost_equal(
+            dterm.prefactor * d2g_deta_deps(
+                eta0, eps0, true_deta_deps(eps0) @  deps, deps),
+            _evaluate_term_fwd(
+                dterm, eta0, eps0, deps, eta_derivs,
+                eval_directional_derivative))
+
+        dterms1 = sensitivity_lib._get_taylor_base_terms()
+        deriv_terms = [ true_deta_deps(eps0) @ deps ]
+        assert_array_almost_equal(
+            dg_deps(eta0, eps0, deps),
+            _evaluate_term_fwd(
+                dterms1[0], eta0, eps0, deps, deriv_terms,
+                eval_directional_derivative))
 
 
 class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
@@ -167,15 +390,10 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
                                    use_cross_hessian_at_opt,
                                    use_hyper_par_objective_fun):
         model = QuadraticModel(dim=dim)
-        lam_folded0 = deepcopy(model.lam)
-        lam0 = model.lambda_pattern.flatten(lam_folded0, free=lambda_free)
+        lam0 = model.lambda_pattern.flatten(
+            model.get_default_lambda(), free=lambda_free)
 
-        # Sanity check that the optimum is correct.
-        get_objective_flat = paragami.FlattenFunctionInput(
-            model.get_objective,
-            free=[theta_free, lambda_free],
-            argnums=[0, 1],
-            patterns=[model.theta_pattern, model.lambda_pattern])
+        get_objective_flat = model.get_flat_objective(theta_free, lambda_free)
         get_objective_for_opt = lambda x: get_objective_flat(x, lam0)
         get_objective_for_opt_grad = autograd.grad(get_objective_for_opt)
         get_objective_for_opt_hessian = autograd.hessian(get_objective_for_opt)
@@ -191,8 +409,9 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
             x0=np.zeros(model.dim),
             method='BFGS')
 
-        theta_folded_0 = model.get_true_optimal_theta(model.lam)
-        theta0 = model.theta_pattern.flatten(theta_folded_0, free=theta_free)
+        get_flat_true_optimal_theta = \
+            model.get_flat_true_optimal_theta(theta_free, lambda_free)
+        theta0 = get_flat_true_optimal_theta(lam0)
         assert_array_almost_equal(theta0, opt_output.x)
 
         # Instantiate the sensitivity object.
@@ -266,6 +485,51 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
             get_dopt_dhyper(lam0),
             parametric_sens.get_dopt_dhyper())
 
+        ########################################
+        # Test the differentiable objective.
+        get_opt_par = parametric_sens.get_opt_par_function()
+        assert_array_almost_equal(theta0, get_opt_par(lam0))
+
+        # Check that you cannot evaluate at other hyperparameters
+        with self.assertRaises(ValueError):
+            get_opt_par(lam0 + 1)
+
+        with self.assertRaises(ValueError):
+            autograd.grad(get_opt_par)(lam0 + 1)
+
+        delta = np.random.random(dim)
+        get_opt_par_fwd = _append_jvp(get_opt_par)
+        with self.assertRaises(ValueError):
+            get_opt_par_fwd(lam0 + 1, delta)
+
+        def fun_of_opt(lam):
+            return np.exp(np.sum(get_opt_par(lam) + 0.1))
+
+        # You cannot use check_grads because you cannot evaluate
+        # `get_opt_par` at different values for finite differences.
+        dopt_dhyper = parametric_sens.get_dopt_dhyper()
+
+        # Test reverse mode
+        assert_array_almost_equal(
+            dopt_dhyper.T @ np.full(dim, fun_of_opt(lam0)),
+            autograd.grad(fun_of_opt)(lam0))
+
+        # Test forward mode
+        delta = np.random.random(dim)
+        fun_of_opt_fwd = _append_jvp(fun_of_opt)
+        assert_array_almost_equal(
+            delta.T @ dopt_dhyper.T @ np.full(dim, fun_of_opt(lam0)),
+            fun_of_opt_fwd(lam0, delta))
+
+        # Check that higher orders fail.
+        with self.assertRaises(NotImplementedError):
+            autograd.hessian(fun_of_opt)(lam0)
+
+        with self.assertRaises(NotImplementedError):
+            fun_of_opt_fwd2 = _append_jvp(fun_of_opt_fwd)
+            fun_of_opt_fwd2(lam0, delta, delta)
+
+
     def test_quadratic_model(self):
         ft_vec = [False, True]
         dim = 3
@@ -281,9 +545,7 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
 
 
 class TestTaylorExpansion(unittest.TestCase):
-    def test_everything(self):
-        # TODO: split some of these out into standalone tests.
-
+    def test_taylor_series(self):
         #################################
         # Set up the ground truth.
 
@@ -296,15 +558,8 @@ class TestTaylorExpansion(unittest.TestCase):
 
         eta_is_free = True
         eps_is_free = True
-        eta0 = model.theta_pattern.flatten(
-            model.get_true_optimal_theta(model.lam), free=eta_is_free)
-        eps0 = model.lambda_pattern.flatten(model.lam, free=eps_is_free)
-
-        objective = paragami.FlattenFunctionInput(
-            original_fun=model.get_objective,
-            patterns=[model.theta_pattern, model.lambda_pattern],
-            free=[eta_is_free, eps_is_free],
-            argnums=[0, 1])
+        eta0, eps0 = model.get_default_flat_values(eta_is_free, eps_is_free)
+        objective = model.get_flat_objective(eta_is_free, eps_is_free)
 
         obj_eta_grad = autograd.grad(objective, argnum=0)
         obj_eps_grad = autograd.grad(objective, argnum=1)
@@ -318,16 +573,19 @@ class TestTaylorExpansion(unittest.TestCase):
         eps1 = eps0 + 1e-1
         eta1 = model.get_true_optimal_theta(eps1)
 
-        # Get the exact derivatives using the closed-form optimum.
-        def get_true_optimal_flat_theta(lam):
-            theta = model.get_true_optimal_theta(lam)
-            return model.theta_pattern.flatten(theta, free=eta_is_free)
+        deps = eps1 - eps0
 
-        get_true_optimal_flat_theta = paragami.FlattenFunctionInput(
-            original_fun=get_true_optimal_flat_theta,
-            patterns=model.lambda_pattern,
-            free=eps_is_free,
-            argnums=0)
+        v1 = np.random.random(len(eta0))
+        v2 = np.random.random(len(eta0))
+        v3 = np.random.random(len(eta0))
+        w1 = np.random.random(len(eps0))
+        w2 = np.random.random(len(eps0))
+        w3 = np.random.random(len(eps0))
+
+        # Get the exact derivatives using the closed-form optimum.
+        get_true_optimal_flat_theta = \
+            model.get_flat_true_optimal_theta(eta_is_free, eps_is_free)
+
         true_deta_deps = autograd.jacobian(get_true_optimal_flat_theta)
         true_d2eta_deps2 = autograd.jacobian(true_deta_deps)
         true_d3eta_deps3 = autograd.jacobian(true_d2eta_deps2)
@@ -338,170 +596,6 @@ class TestTaylorExpansion(unittest.TestCase):
         assert_array_almost_equal(
             true_deta_deps(eps0),
             -1 * np.linalg.solve(hess0, d2f_deta_deps))
-
-        ########################
-        # Test append_jvp.
-        dobj_deta = sensitivity_lib._append_jvp(
-            objective, num_base_args=2, argnum=0)
-        d2obj_deta_deta = sensitivity_lib._append_jvp(
-            dobj_deta, num_base_args=2, argnum=0)
-
-        v1 = np.random.random(len(eta0))
-        v2 = np.random.random(len(eta0))
-        v3 = np.random.random(len(eta0))
-        w1 = np.random.random(len(eps0))
-        w2 = np.random.random(len(eps0))
-        w3 = np.random.random(len(eps0))
-
-        # Check the first argument
-        assert_array_almost_equal(
-            np.einsum('i,i', obj_eta_grad(eta0, eps0), v1),
-            dobj_deta(eta0, eps0, v1))
-        assert_array_almost_equal(
-            np.einsum('ij,i,j', obj_eta_hessian(eta0, eps0), v1, v2),
-            d2obj_deta_deta(eta0, eps0, v1, v2))
-
-        # Check the second argument
-        dobj_deps = sensitivity_lib._append_jvp(
-            objective, num_base_args=2, argnum=1)
-        d2obj_deps_deps = sensitivity_lib._append_jvp(
-            dobj_deps, num_base_args=2, argnum=1)
-
-        assert_array_almost_equal(
-            np.einsum('i,i', obj_eps_grad(eta0, eps0), w1),
-            dobj_deps(eta0, eps0, w1))
-
-        assert_array_almost_equal(
-            np.einsum('ij,i,j', obj_eps_hessian(eta0, eps0), w1, w2),
-            d2obj_deps_deps(eta0, eps0, w1, w2))
-
-        # Check mixed arguments
-        d2obj_deps_deta = sensitivity_lib._append_jvp(
-            dobj_deps, num_base_args=2, argnum=0)
-        d2obj_deta_deps = sensitivity_lib._append_jvp(
-            dobj_deta, num_base_args=2, argnum=1)
-
-        assert_array_almost_equal(
-            d2obj_deps_deta(eta0, eps0, v1, w1),
-            d2obj_deta_deps(eta0, eps0, w1, v1))
-
-        assert_array_almost_equal(
-            np.einsum('ij,i,j', get_dobj_deta_deps(eta0, eps0), v1, w1),
-            d2obj_deps_deta(eta0, eps0, v1, w1))
-
-        # Check derivatives of vectors.
-        dg_deta = sensitivity_lib._append_jvp(
-            obj_eta_grad, num_base_args=2, argnum=0)
-
-        assert_array_almost_equal(
-            hess0 @ v1, dg_deta(eta0, eps0, v1))
-
-        ########################
-        # Test derivative terms.
-
-        # Again, first some ground truth.
-        def eval_deta_deps(eta, eps, v1):
-            assert np.max(np.sum(eps - eps0)) < 1e-8
-            assert np.max(np.sum(eta - eta0)) < 1e-8
-            return -1 * np.linalg.solve(hess0, d2f_deta_deps @ v1)
-
-        dg_deta = sensitivity_lib._append_jvp(
-            obj_eta_grad, num_base_args=2, argnum=0)
-        dg_deps = sensitivity_lib._append_jvp(
-            obj_eta_grad, num_base_args=2, argnum=1)
-
-        d2g_deta_deta = sensitivity_lib._append_jvp(
-            dg_deta, num_base_args=2, argnum=0)
-        d2g_deta_deps = sensitivity_lib._append_jvp(
-            dg_deta, num_base_args=2, argnum=1)
-        d2g_deps_deta = sensitivity_lib._append_jvp(
-            dg_deps, num_base_args=2, argnum=0)
-        d2g_deps_deps = sensitivity_lib._append_jvp(
-            dg_deps, num_base_args=2, argnum=1)
-
-        # This is a manual version of the second derivative.
-        def eval_d2eta_deps2(eta, eps, delta_eps):
-            assert np.max(np.sum(eps - eps0)) < 1e-8
-            assert np.max(np.sum(eta - eta0)) < 1e-8
-
-            deta_deps = -1 * np.linalg.solve(
-                hess0, dg_deps(eta, eps, delta_eps))
-
-            # Then the terms in the second derivative.
-            d2_terms = \
-                d2g_deps_deps(eta, eps, delta_eps, delta_eps) + \
-                d2g_deps_deta(eta, eps, delta_eps, deta_deps) + \
-                d2g_deta_deps(eta, eps, deta_deps, delta_eps) + \
-                d2g_deta_deta(eta, eps, deta_deps, deta_deps)
-            d2eta_deps2 = -1 * np.linalg.solve(hess0, d2_terms)
-            return d2eta_deps2
-
-        eval_g_derivs = \
-            sensitivity_lib._generate_two_term_fwd_derivative_array(
-                obj_eta_grad, order=5)
-
-        assert_array_almost_equal(
-            hess0 @ v1,
-            eval_g_derivs[1][0](eta0, eps0, v1))
-
-        d2g_deta_deta(eta0, eps0, v1, v2)
-        eval_g_derivs[2][0](eta0, eps0, v1, v2)
-
-        assert_array_almost_equal(
-            d2g_deta_deta(eta0, eps0, v1, v2),
-            eval_g_derivs[2][0](eta0, eps0, v1, v2))
-
-        assert_array_almost_equal(
-            d2g_deta_deps(eta0, eps0, v1, v2),
-            eval_g_derivs[1][1](eta0, eps0, v1, v2))
-
-        # Test the DerivativeTerm.
-
-        dterm = sensitivity_lib.DerivativeTerm(
-            eps_order=1,
-            eta_orders=[1, 0],
-            prefactor=1.5,
-            eval_g_derivs=eval_g_derivs)
-
-        deps = eps1 - eps0
-
-        eta_derivs = [ eval_deta_deps(eta0, eps0, deps) ]
-        assert_array_almost_equal(
-            dterm.prefactor * d2g_deta_deps(
-                eta0, eps0, eval_deta_deps(eta0, eps0, deps), deps),
-            dterm.evaluate(eta0, eps0, deps,eta_derivs))
-
-        dterms = [
-            sensitivity_lib.DerivativeTerm(
-                eps_order=2,
-                eta_orders=[0, 0],
-                prefactor=1.5,
-                eval_g_derivs=eval_g_derivs),
-            sensitivity_lib.DerivativeTerm(
-                eps_order=1,
-                eta_orders=[1, 0],
-                prefactor=2,
-                eval_g_derivs=eval_g_derivs),
-            sensitivity_lib.DerivativeTerm(
-                eps_order=1,
-                eta_orders=[1, 0],
-                prefactor=3,
-                eval_g_derivs=eval_g_derivs) ]
-
-        dterms_combined = sensitivity_lib._consolidate_terms(dterms)
-        self.assertEqual(3, len(dterms))
-        self.assertEqual(2, len(dterms_combined))
-
-        # TODO: test dterm.differentiate() explicity.
-
-        dterms1 = sensitivity_lib._get_taylor_base_terms(eval_g_derivs)
-
-        deriv_terms = [ true_deta_deps(eps0) @ deps ]
-        assert_array_almost_equal(
-            dg_deps(eta0, eps0, deps),
-            dterms1[0].evaluate(eta0, eps0, deps, deriv_terms))
-
-        hess_solver = solver_lib.SystemSolver(hess0, 'factorization')
 
         ###################################
         # Test the Taylor series itself.
@@ -554,107 +648,6 @@ class TestTaylorExpansion(unittest.TestCase):
             taylor_expansion.evaluate_taylor_series(eps1, max_order=3),
             np.sum(terms, axis=0))
 
-
-class TestBlockHessian(unittest.TestCase):
-    def test_block_hessian(self):
-        np.random.seed(42)
-
-        group_size = 3
-        num_groups = 10
-        d = group_size * num_groups
-
-        pattern = paragami.PatternDict()
-        pattern['array'] = \
-            paragami.NumericArrayPattern((num_groups, group_size))
-        mat_pattern = paragami.PSDSymmetricMatrixPattern(size=group_size)
-        pattern['mats'] = paragami.PatternArray((num_groups,), mat_pattern)
-
-        def f(x_dict):
-            return 0.5 * np.einsum(
-                'nij,ni,nj', x_dict['mats'], x_dict['array'], x_dict['array'])
-
-        f_flat = paragami.FlattenFunctionInput(
-            f, argnums=0, free=True, patterns=pattern)
-
-        x = pattern.random()
-        x_flat = pattern.flatten(x, free=True)
-        f(x)
-
-        f_hess = autograd.hessian(f_flat, argnum=0)
-        h0 = f_hess(x_flat)
-
-        inds = []
-        for g in range(num_groups):
-            x_bool = pattern.empty_bool(False)
-            x_bool['array'][g, :] = True
-            x_bool['mats'][g, :, :] = True
-            inds.append(pattern.flat_indices(x_bool, free=True))
-        inds = np.array(inds)
-
-        sparse_hess = vittles.SparseBlockHessian(f_flat, inds)
-        block_hess = sparse_hess.get_block_hessian(x_flat)
-
-        assert_array_almost_equal(np.array(block_hess.todense()), h0)
-
-    def test_full_hessian(self):
-        np.random.seed(42)
-
-        group_size = 3
-        num_groups = 10
-        d = group_size * num_groups
-
-        pattern = paragami.PatternDict()
-        pattern['array'] = \
-            paragami.NumericArrayPattern((num_groups, group_size))
-        mat_pattern = paragami.PSDSymmetricMatrixPattern(size=group_size)
-        pattern['mats'] = paragami.PatternArray((num_groups,), mat_pattern)
-        pattern['scales'] = paragami.NumericVectorPattern(length=2, lb=0.0)
-
-        def f(x_dict):
-            scale = np.prod(x_dict['scales'])
-            scale_prior = np.exp(-1 * scale)
-            return 0.5 * scale * np.einsum(
-                'nij,ni,nj', x_dict['mats'], x_dict['array'], x_dict['array'])
-
-        f_flat = paragami.FlattenFunctionInput(
-            f, argnums=0, free=True, patterns=pattern)
-
-        x = pattern.random()
-        x_flat = pattern.flatten(x, free=True)
-        f(x)
-
-        group_inds = []
-        x_bool = pattern.empty_bool(False)
-        for g in range(num_groups):
-            x_bool['array'][g, :] = True
-            x_bool['mats'][g, :, :] = True
-            group_inds.append(pattern.flat_indices(x_bool, free=True))
-            x_bool['array'][g, :] = False
-            x_bool['mats'][g, :, :] = False
-        group_inds = np.array(group_inds)
-
-        f_hess = autograd.hessian(f_flat, argnum=0)
-        h0 = f_hess(x_flat)
-
-        x_bool['scales'][:] = True
-        global_inds_paragami = pattern.flat_indices(x_bool, free=True)
-        x_bool['scales'][:] = False
-
-        sparse_hess = vittles.SparseBlockHessian(f_flat, group_inds)
-
-        block_hess = \
-            sparse_hess.get_block_hessian(x_flat) + \
-            sparse_hess.get_global_hessian(x_flat)
-        assert_array_almost_equal(h0, block_hess.todense())
-
-        block_hess = \
-            sparse_hess.get_block_hessian(x_flat) + \
-            sparse_hess.get_global_hessian(
-                x_flat, global_inds=global_inds_paragami)
-        assert_array_almost_equal(h0, block_hess.todense())
-
-        block_hess = sparse_hess.get_hessian(x_flat, print_every=1)
-        assert_array_almost_equal(h0, block_hess.todense())
 
 if __name__ == '__main__':
     unittest.main()

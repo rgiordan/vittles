@@ -70,7 +70,8 @@ class SystemSolver:
             else:
                 return sp.linalg.cho_solve(self._h_chol, v)
         elif self._method == 'cg':
-            cg_result = sp.sparse.linalg.cg(self._linop, v, **self._cg_opts)
+            cg_result = sp.sparse.linalg.cg(
+                self._linop, v, **self._cg_opts, atol='legacy')
             if cg_result[1] != 0:
                 warnings.warn('CG exited with error code {}'.format(cg_result[1]))
             return cg_result[0]
