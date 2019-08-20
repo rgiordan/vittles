@@ -575,13 +575,6 @@ class TestTaylorExpansion(unittest.TestCase):
 
         deps = eps1 - eps0
 
-        v1 = np.random.random(len(eta0))
-        v2 = np.random.random(len(eta0))
-        v3 = np.random.random(len(eta0))
-        w1 = np.random.random(len(eps0))
-        w2 = np.random.random(len(eps0))
-        w3 = np.random.random(len(eps0))
-
         # Get the exact derivatives using the closed-form optimum.
         get_true_optimal_flat_theta = \
             model.get_flat_true_optimal_theta(eta_is_free, eps_is_free)
@@ -601,15 +594,15 @@ class TestTaylorExpansion(unittest.TestCase):
         # Test the Taylor series itself.
 
         test_order = 3
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            taylor_expansion = \
-                sensitivity_lib.ParametricSensitivityTaylorExpansion(
-                    objective_function=objective,
-                    input_val0=eta0,
-                    hyper_val0=eps0,
-                    order=test_order,
-                    hess0=hess0)
+        # with warnings.catch_warnings():
+        #     warnings.simplefilter("ignore")
+        taylor_expansion = \
+            sensitivity_lib.ParametricSensitivityTaylorExpansion(
+                objective_function=objective,
+                input_val0=eta0,
+                hyper_val0=eps0,
+                order=test_order,
+                hess0=hess0)
 
         self.assertEqual(test_order, taylor_expansion.get_max_order())
         taylor_expansion.print_terms(k=3)
@@ -644,10 +637,60 @@ class TestTaylorExpansion(unittest.TestCase):
 
         terms = taylor_expansion.evaluate_taylor_series_terms(
             eps1, max_order=3)
+
         assert_array_almost_equal(
             taylor_expansion.evaluate_taylor_series(eps1, max_order=3),
             np.sum(terms, axis=0))
 
+    def _test_max_order(self, eta_order, eps_order, test_order):
+
+        # Partial derivative of the gradient higher than eta_order and
+        # eps_order are zero.
+        def objective(eta, eps):
+            eta_sum = np.sum(eta)
+            eps_sum = np.sum(eps)
+            return (eta_sum ** (eta_order + 1)) * (eps_sum ** eps_order)
+
+        # These need to be nonzero for the test to be valid.
+        # Note that this test doesn't require an actual optimum,
+        # nor does it require the real Hessian.
+        eta0 = 0.01 * np.arange(2)
+        eps0 = 0.02 * np.arange(3)
+        eps1 = eps0 + 1
+
+        # We don't actually need the real Hessian for this test.
+        hess0 = np.diag(np.array([2.1, 4.5]))
+
+        taylor_expansion_truth = \
+            sensitivity_lib.ParametricSensitivityTaylorExpansion(
+                objective_function=objective,
+                input_val0=eta0,
+                hyper_val0=eps0,
+                hess0=hess0,
+                order=test_order)
+
+        taylor_expansion_test = \
+            sensitivity_lib.ParametricSensitivityTaylorExpansion(
+                objective_function=objective,
+                input_val0=eta0,
+                hyper_val0=eps0,
+                hess0=hess0,
+                max_input_order=eta_order,
+                max_hyper_order=eps_order,
+                order=test_order)
+
+        assert_array_almost_equal(
+            taylor_expansion_truth.evaluate_taylor_series(eps1),
+            taylor_expansion_test.evaluate_taylor_series(eps1))
+
+
+    def test_max_orders(self):
+        self._test_max_order(1, 1, 4)
+        self._test_max_order(1, 2, 4)
+        self._test_max_order(2, 1, 4)
+        self._test_max_order(2, 2, 4)
+        self._test_max_order(1, 3, 4)
+        self._test_max_order(3, 1, 4)
 
 if __name__ == '__main__':
     unittest.main()

@@ -535,12 +535,6 @@ def _evaluate_term_fwd(term, eta0, eps0, deps, eta_derivs,
         Default is `False`.
     """
 
-    print('---------------')
-    print(term.order())
-    print(eta_derivs)
-    print(term.eta_orders)
-    print('---------------')
-
     if validate:
         if len(eta_derivs) < term.order() - 1:
             raise ValueError('Not enough derivatives in ``eta_derivs``.')
