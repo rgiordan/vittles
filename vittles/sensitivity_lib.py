@@ -527,26 +527,14 @@ def _evaluate_term_fwd(term, eta0, eps0, deps, eta_derivs,
         A function matching `eval_directional_derivative` in
         ForwardModeDerivativeArray.
     validate: optional `bool`
-        If `True`, run checks for the appropriate sizes of `eta_derivs` and
-        `eval_g_derivs` and produce helpful error messages if necessary.
+        If `True`, run checks for the appropriate sizes of arguments and
+        produce helpful error messages if necessary.
         Default is `False`.
     """
 
     if validate:
         if len(eta_derivs) < term.order() - 1:
             raise ValueError('Not enough derivatives in ``eta_derivs``.')
-
-        # if len(eval_g_derivs) <= len(term.eta_orders):
-        #     raise ValueError('Not enough eta orders in ``eval_g_derivs``.')
-        #
-        # for eta_deriv_list in eval_g_derivs:
-        #     if len(eta_deriv_list) <= self.eps_order:
-        #         raise ValueError(
-        #             'Not enough epsilon orders in ``eval_g_derivs``.')
-
-    # Get the derivative of g needed for this particular term.
-    # eval_g_deriv = \
-    #     eval_g_derivs[np.sum(term.eta_orders)][term.eps_order]
 
     # First eta arguments, then epsilons.
     vec_args = []
@@ -563,52 +551,7 @@ def _evaluate_term_fwd(term, eta0, eps0, deps, eta_derivs,
         eps_directions.append(deps)
 
     return term.prefactor * eval_directional_derivative(
-        eta0, eps0, eta_directions, eps_directions)
-    # return term.prefactor * eval_g_deriv(eta0, eps0, *vec_args)
-
-
-# def _generate_two_term_fwd_derivative_array(fun, order1, order2):
-#     """
-#     Generate an array of JVPs of the two arguments of the target function fun.
-#
-#     Parameters
-#     -------------
-#     fun: callable function
-#         The function to be differentiated.  The first two arguments
-#         should be vectors for differentiation, i.e., fun should have signature
-#         fun(x1, x2, ...) and return a numeric value.
-#      order1: integer
-#         The maximum order of the partial derivatives with respect to the first
-#         argument.
-#      order2: integer
-#         The maximum order of the partial derivatives with respect to the second
-#         argument.
-#
-#     Returns
-#     ------------
-#     An array of functions where element eval_fun_derivs[i][j] is a function
-#     ``eval_fun_derivs[i][j](x1, x2, ..., v1, ... vi, w1, ..., wj)) =
-#     \partial^{i + j}fun / (\partial x1^i \partial x2^j) v1 ... vi w1 ... wj``.
-#     Note that ``eval_fun_derivs[0][0]`` evaluates the original function.
-#
-#     This array is intended to be used as the `eval_g_derivs` argument to
-#     `evaluate_term_fwd`.
-#     """
-#     eval_fun_derivs = [[ fun ]]
-#     for x1_ind in range(order1 + 1):
-#         if x1_ind > 0: # The first row should be 0-th order x1 partials.
-#             # Append one x1 derivative.
-#             next_deriv = _append_jvp(
-#                 eval_fun_derivs[x1_ind - 1][0], num_base_args=2, argnum=0)
-#             eval_fun_derivs.append([ next_deriv ])
-#         for x2_ind in range(order2):
-#             # Append one x2 derivative.  Note that the array already contains
-#             # a 0-th order x2 partial, and we are appending order2 new
-#             # derivatives, for a max order of order2 in order2 + 1 columns.
-#             next_deriv = _append_jvp(
-#                 eval_fun_derivs[x1_ind][x2_ind], num_base_args=2, argnum=1)
-#             eval_fun_derivs[x1_ind].append(next_deriv)
-#     return eval_fun_derivs
+        eta0, eps0, eta_directions, eps_directions, validate=validate)
 
 
 def _contract_tensor(deriv_array, dx1s, dx2s):
@@ -659,14 +602,14 @@ class ForwardModeDerivativeArray():
                     num_base_args=2, argnum=1)
                 self._eval_fun_derivs[x1_ind].append(next_deriv)
 
-    def eval_directional_derivative(self, x1, x2, dx1s, dx2s, check=True):
+    def eval_directional_derivative(self, x1, x2, dx1s, dx2s, validate=True):
         """Evaluate the directional derivative in the directions
         dx1s[0] ..., dx1s[N_1], dx2s[0], ..., dx2s[N_2].
         """
 
         order1 = len(dx1s)
         order2 = len(dx2s)
-        if check:
+        if validate:
             if order1 > self._order1:
                 raise ValueError(
                     'The number of `dx1s` () must be <= order1 = {}'.format(
@@ -758,14 +701,14 @@ class ReverseModeDerivativeArray():
             raise ValueError(
                 'You must use the x1 and x2 set in `set_evaluation_location`.')
 
-    def eval_directional_derivative(self, x1, x2, dx1s, dx2s, check=True):
+    def eval_directional_derivative(self, x1, x2, dx1s, dx2s, validate=True):
         """Evaluate the directional derivative in the directions
         dx1s[0] ..., dx1s[N_1], dx2s[0], ..., dx2s[N_2].
         """
 
         order1 = len(dx1s)
         order2 = len(dx2s)
-        if check:
+        if validate:
             self._check_location(x1, x2)
             if order1 > self._order1:
                 raise ValueError(
