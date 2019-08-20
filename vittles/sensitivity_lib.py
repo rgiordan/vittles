@@ -535,6 +535,12 @@ def _evaluate_term_fwd(term, eta0, eps0, deps, eta_derivs,
         Default is `False`.
     """
 
+    print('---------------')
+    print(term.order())
+    print(eta_derivs)
+    print(term.eta_orders)
+    print('---------------')
+
     if validate:
         if len(eta_derivs) < term.order() - 1:
             raise ValueError('Not enough derivatives in ``eta_derivs``.')
@@ -896,8 +902,15 @@ class ParametricSensitivityTaylorExpansion(object):
 
         # You need one more gradient derivative than the order of the Taylor
         # approximation.
-        order1 = min(self._order + 1, self._max_input_order)
-        order2 = min(self._order + 2, self._max_hyper_order)
+        if self._max_input_order is None:
+            order1 = self._order + 1
+        else:
+            order1 = min(self._order + 1, self._max_input_order)
+
+        if self._max_hyper_order is None:
+            order2 = self._order + 2
+        else:
+            order2 = min(self._order + 2, self._max_hyper_order)
         self._deriv_array = ForwardModeDerivativeArray(
             self._objective_function_eta_grad,
             order1=order1,
@@ -942,15 +955,17 @@ class ParametricSensitivityTaylorExpansion(object):
         for term in self._taylor_terms_list[k - 1]:
             # Exclude the highest order eta derivative -- this what
             # we are trying to calculate.
-            if (term.eta_orders[-1] == 0):
+            if (term.eta_orders[-1] > 0):
                 continue
 
             # Assume that epsilon partials higher than this are zero.
-            if term.eps_order > self._max_hyper_order:
+            if self._max_hyper_order is not None and \
+               term.eps_order > self._max_hyper_order:
                 continue
 
             # Assume that eta partials higher than this are zero.
-            if term.total_eta_order > self._max_input_order:
+            if self._max_input_order is not None and \
+               term.total_eta_order > self._max_input_order:
                 continue
 
             vec += \
