@@ -546,6 +546,10 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
 
 class TestTaylorExpansion(unittest.TestCase):
     def test_taylor_series(self):
+        self._test_taylor_series(use_hess=True)
+        self._test_taylor_series(use_hess=False)
+
+    def _test_taylor_series(self, use_hess):
         #################################
         # Set up the ground truth.
 
@@ -561,21 +565,38 @@ class TestTaylorExpansion(unittest.TestCase):
         eta0, eps0 = model.get_default_flat_values(eta_is_free, eps_is_free)
         objective = model.get_flat_objective(eta_is_free, eps_is_free)
 
-        obj_eta_grad = autograd.grad(objective, argnum=0)
-        obj_eps_grad = autograd.grad(objective, argnum=1)
         obj_eta_hessian = autograd.hessian(objective, argnum=0)
-        obj_eps_hessian = autograd.hessian(objective, argnum=1)
-        get_dobj_deta_deps = autograd.jacobian(
-            autograd.jacobian(objective, argnum=0), argnum=1)
-
         hess0 = obj_eta_hessian(eta0, eps0)
+
+        if use_hess:
+            hess0_arg = hess0
+        else:
+            hess0_arg = None
+
+        test_order = 3
+        taylor_expansion = \
+            sensitivity_lib.ParametricSensitivityTaylorExpansion(
+                objective_function=objective,
+                input_val0=eta0,
+                hyper_val0=eps0,
+                order=test_order,
+                hess0=hess0_arg)
+
+        self.assertEqual(test_order, taylor_expansion.get_max_order())
+        taylor_expansion.print_terms(k=3)
+
+        # Get the exact derivatives using the closed-form optimum.
+
+        # obj_eta_grad = autograd.grad(objective, argnum=0)
+        # obj_eps_grad = autograd.grad(objective, argnum=1)
+        #obj_eps_hessian = autograd.hessian(objective, argnum=1)
+
 
         eps1 = eps0 + 1e-1
         eta1 = model.get_true_optimal_theta(eps1)
 
         deps = eps1 - eps0
 
-        # Get the exact derivatives using the closed-form optimum.
         get_true_optimal_flat_theta = \
             model.get_flat_true_optimal_theta(eta_is_free, eps_is_free)
 
@@ -585,27 +606,12 @@ class TestTaylorExpansion(unittest.TestCase):
         true_d4eta_deps4 = autograd.jacobian(true_d3eta_deps3)
 
         # Sanity check using standard first-order approximation.
+        get_dobj_deta_deps = autograd.jacobian(
+            autograd.jacobian(objective, argnum=0), argnum=1)
         d2f_deta_deps = get_dobj_deta_deps(eta0, eps0)
         assert_array_almost_equal(
             true_deta_deps(eps0),
             -1 * np.linalg.solve(hess0, d2f_deta_deps))
-
-        ###################################
-        # Test the Taylor series itself.
-
-        test_order = 3
-        # with warnings.catch_warnings():
-        #     warnings.simplefilter("ignore")
-        taylor_expansion = \
-            sensitivity_lib.ParametricSensitivityTaylorExpansion(
-                objective_function=objective,
-                input_val0=eta0,
-                hyper_val0=eps0,
-                order=test_order,
-                hess0=hess0)
-
-        self.assertEqual(test_order, taylor_expansion.get_max_order())
-        taylor_expansion.print_terms(k=3)
 
         d1 = np.einsum('ij,j', true_deta_deps(eps0), deps)
         d2 = np.einsum('ijk,j,k', true_d2eta_deps2(eps0), deps, deps)
@@ -691,6 +697,7 @@ class TestTaylorExpansion(unittest.TestCase):
         self._test_max_order(2, 2, 4)
         self._test_max_order(1, 3, 4)
         self._test_max_order(3, 1, 4)
+
 
 if __name__ == '__main__':
     unittest.main()
