@@ -852,10 +852,10 @@ class ParametricSensitivityTaylorExpansion(object):
         else:
             self._hyper_par_objective_function = hyper_par_objective_function
 
-        self.set_base_values(input_val0, hyper_val0, hess0=hess0)
         self._set_order(order)
+        self.set_base_values(input_val0, hyper_val0, hess0=hess0)
 
-    def set_base_values(self, input_val0, hyper_val0, hess0=None):
+    def set_base_values(self, input_val0, hyper_val0, hess0=None, force=False):
         """
         Set the values at which the Taylor series is to be evaluated.
 
@@ -868,9 +868,18 @@ class ParametricSensitivityTaylorExpansion(object):
         hess0: `numpy.ndarray` (N, N)
             Optional.  The Hessian of the objective at (input_val0, hyper_val0).
             If not specified it is calculated at initialization.
+        force: `bool`
+            Optional.  If `True`, force the instantiation of potentially
+            expensive reverse mode derivative arrays.  Default is `False`.
         """
         self._input_val0 = deepcopy(input_val0)
         self._hyper_val0 = deepcopy(hyper_val0)
+
+        if not self._forward_mode:
+            # Set the derivative arrays.
+            # TODO: don't duplicate the Hessian calculation?
+            self._deriv_array.set_evaluation_location(
+                self._input_val0, self._hyper_val0, force=force)
 
         # TODO: if using reverse mode, set the other derivatives here.
 
@@ -911,10 +920,17 @@ class ParametricSensitivityTaylorExpansion(object):
             order2 = self._order + 2
         else:
             order2 = min(self._order + 2, self._max_hyper_order)
-        self._deriv_array = ForwardModeDerivativeArray(
-            self._objective_function_eta_grad,
-            order1=order1,
-            order2=order2)
+
+        if self._forward_mode:
+            self._deriv_array = ForwardModeDerivativeArray(
+                self._objective_function_eta_grad,
+                order1=order1,
+                order2=order2)
+        else:
+            self._deriv_array = ReverseModeDerivativeArray(
+                self._objective_function_eta_grad,
+                order1=order1,
+                order2=order2)
 
         self._taylor_terms_list = [ _get_taylor_base_terms() ]
         for k in range(1, self._order):

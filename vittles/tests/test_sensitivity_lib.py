@@ -709,7 +709,50 @@ class TestTaylorExpansion(unittest.TestCase):
 
 
     def test_reverse_mode(self):
-        pass
+        # Test with weighted linear regression, which has only one partial
+        # derivative with respect to the hyperparameter.
+        n_obs = 100
+        dim = 2
+        theta_true = np.array([0.5, -0.1])
+        x = np.random.random((n_obs, dim))
+        y = x @ theta_true + np.random.normal(n_obs)
+        def objective(theta, w):
+            resid = y - x @ theta
+            return np.sum(w * (resid ** 2))
+
+        def run_regression(w):
+            xtx = np.einsum('n,ni,nj->ij', w, x, x)
+            xty = np.einsum('n,ni,n->i', w, x, y)
+            return np.linalg.solve(xtx, xty)
+
+        w1 = np.ones(n_obs)
+        theta0 = run_regression(w1)
+
+        test_order = 3
+        taylor_expansion = \
+            sensitivity_lib.ParametricSensitivityTaylorExpansion(
+                objective_function=objective,
+                input_val0=theta0,
+                hyper_val0=w1,
+                order=test_order,
+                max_hyper_order=1,
+                forward_mode=False)
+
+        # Get exact derivatives using the closed form.
+        dtheta_dw = _append_jvp(run_regression)
+        d2theta_dw2 = _append_jvp(dtheta_dw)
+        d3theta_dw3 = _append_jvp(d2theta_dw2)
+
+        dw = np.random.random(n_obs) - 0.5
+
+        d1 = dtheta_dw(w1, dw)
+        d2 = d2theta_dw2(w1, dw, dw)
+        d3 = d3theta_dw3(w1, dw, dw, dw)
+
+        assert_array_almost_equal(
+            taylor_expansion.evaluate_taylor_series(dw),
+            theta0 + d1 + d2 / 2 + d3 / 6)
+
 
 if __name__ == '__main__':
     unittest.main()
