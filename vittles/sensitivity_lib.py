@@ -508,8 +508,8 @@ class DerivativeTerm:
             prefactor=self.prefactor + term.prefactor)
 
 
-def _evaluate_term_fwd(term, eta0, eps0, deps, eta_derivs, eval_g_derivs,
-                       validate=False):
+def _evaluate_term_fwd(term, eta0, eps0, deps, eta_derivs,
+                       eval_directional_derivative, validate=False):
     """Evaluate the DerivativeTerm in forward mode.
 
     Parameters
@@ -523,11 +523,9 @@ def _evaluate_term_fwd(term, eta0, eps0, deps, eta_derivs, eval_g_derivs,
     eta_derivs : `list` of `numpy.ndarray`
         A list where ``eta_derivs[i]`` contains
         :math:`d\\eta^i / d\\epsilon^i \\Delta \\epsilon^i`.
-    eval_g_derivs:
-        A list of lists of g jacobian vector product functions.
-        The array should be such that
-        eval_g_derivs[i][j](eta0, eps0, v1 ... vi, w1 ... wj)
-        evaluates d^{i + j} G / (deta^i)(deps^j)(v1 ... vi)(w1 ... wj).
+    eval_directional_derivative:
+        A function matching `eval_directional_derivative` in
+        ForwardModeDerivativeArray.
     validate: optional `bool`
         If `True`, run checks for the appropriate sizes of `eta_derivs` and
         `eval_g_derivs` and produce helpful error messages if necessary.
@@ -538,76 +536,79 @@ def _evaluate_term_fwd(term, eta0, eps0, deps, eta_derivs, eval_g_derivs,
         if len(eta_derivs) < term.order() - 1:
             raise ValueError('Not enough derivatives in ``eta_derivs``.')
 
-        if len(eval_g_derivs) <= len(term.eta_orders):
-            raise ValueError('Not enough eta orders in ``eval_g_derivs``.')
-
-        for eta_deriv_list in eval_g_derivs:
-            if len(eta_deriv_list) <= self.eps_order:
-                raise ValueError(
-                    'Not enough epsilon orders in ``eval_g_derivs``.')
+        # if len(eval_g_derivs) <= len(term.eta_orders):
+        #     raise ValueError('Not enough eta orders in ``eval_g_derivs``.')
+        #
+        # for eta_deriv_list in eval_g_derivs:
+        #     if len(eta_deriv_list) <= self.eps_order:
+        #         raise ValueError(
+        #             'Not enough epsilon orders in ``eval_g_derivs``.')
 
     # Get the derivative of g needed for this particular term.
-    eval_g_deriv = \
-        eval_g_derivs[np.sum(term.eta_orders)][term.eps_order]
+    # eval_g_deriv = \
+    #     eval_g_derivs[np.sum(term.eta_orders)][term.eps_order]
 
     # First eta arguments, then epsilons.
     vec_args = []
 
+    eta_directions = []
     for i in range(len(term.eta_orders)):
         eta_order = term.eta_orders[i]
         if eta_order > 0:
-            vec = eta_derivs[i]
             for j in range(eta_order):
-                vec_args.append(vec)
+                eta_directions.append(eta_derivs[i])
 
+    eps_directions = []
     for i in range(term.eps_order):
-        vec_args.append(deps)
+        eps_directions.append(deps)
 
-    return term.prefactor * eval_g_deriv(eta0, eps0, *vec_args)
+    return term.prefactor * eval_directional_derivative(
+        eta0, eps0, eta_directions, eps_directions)
+    # return term.prefactor * eval_g_deriv(eta0, eps0, *vec_args)
 
 
-def _generate_two_term_fwd_derivative_array(fun, order1, order2):
-    """
-    Generate an array of JVPs of the two arguments of the target function fun.
-
-    Parameters
-    -------------
-    fun: callable function
-        The function to be differentiated.  The first two arguments
-        should be vectors for differentiation, i.e., fun should have signature
-        fun(x1, x2, ...) and return a numeric value.
-     order1: integer
-        The maximum order of the partial derivatives with respect to the first
-        argument.
-     order2: integer
-        The maximum order of the partial derivatives with respect to the second
-        argument.
-
-    Returns
-    ------------
-    An array of functions where element eval_fun_derivs[i][j] is a function
-    ``eval_fun_derivs[i][j](x1, x2, ..., v1, ... vi, w1, ..., wj)) =
-    \partial^{i + j}fun / (\partial x1^i \partial x2^j) v1 ... vi w1 ... wj``.
-    Note that ``eval_fun_derivs[0][0]`` evaluates the original function.
-
-    This array is intendted to be used as the `eval_g_derivs` argument to
-    `evaluate_term_fwd`.
-    """
-    eval_fun_derivs = [[ fun ]]
-    for x1_ind in range(order1 + 1):
-        if x1_ind > 0: # The first row should be 0-th order x1 partials.
-            # Append one x1 derivative.
-            next_deriv = _append_jvp(
-                eval_fun_derivs[x1_ind - 1][0], num_base_args=2, argnum=0)
-            eval_fun_derivs.append([ next_deriv ])
-        for x2_ind in range(order2):
-            # Append one x2 derivative.  Note that the array already contains
-            # a 0-th order x2 partial, and we are appending order2 new
-            # derivatives, for a max order of order2 in order2 + 1 columns.
-            next_deriv = _append_jvp(
-                eval_fun_derivs[x1_ind][x2_ind], num_base_args=2, argnum=1)
-            eval_fun_derivs[x1_ind].append(next_deriv)
-    return eval_fun_derivs
+# def _generate_two_term_fwd_derivative_array(fun, order1, order2):
+#     """
+#     Generate an array of JVPs of the two arguments of the target function fun.
+#
+#     Parameters
+#     -------------
+#     fun: callable function
+#         The function to be differentiated.  The first two arguments
+#         should be vectors for differentiation, i.e., fun should have signature
+#         fun(x1, x2, ...) and return a numeric value.
+#      order1: integer
+#         The maximum order of the partial derivatives with respect to the first
+#         argument.
+#      order2: integer
+#         The maximum order of the partial derivatives with respect to the second
+#         argument.
+#
+#     Returns
+#     ------------
+#     An array of functions where element eval_fun_derivs[i][j] is a function
+#     ``eval_fun_derivs[i][j](x1, x2, ..., v1, ... vi, w1, ..., wj)) =
+#     \partial^{i + j}fun / (\partial x1^i \partial x2^j) v1 ... vi w1 ... wj``.
+#     Note that ``eval_fun_derivs[0][0]`` evaluates the original function.
+#
+#     This array is intended to be used as the `eval_g_derivs` argument to
+#     `evaluate_term_fwd`.
+#     """
+#     eval_fun_derivs = [[ fun ]]
+#     for x1_ind in range(order1 + 1):
+#         if x1_ind > 0: # The first row should be 0-th order x1 partials.
+#             # Append one x1 derivative.
+#             next_deriv = _append_jvp(
+#                 eval_fun_derivs[x1_ind - 1][0], num_base_args=2, argnum=0)
+#             eval_fun_derivs.append([ next_deriv ])
+#         for x2_ind in range(order2):
+#             # Append one x2 derivative.  Note that the array already contains
+#             # a 0-th order x2 partial, and we are appending order2 new
+#             # derivatives, for a max order of order2 in order2 + 1 columns.
+#             next_deriv = _append_jvp(
+#                 eval_fun_derivs[x1_ind][x2_ind], num_base_args=2, argnum=1)
+#             eval_fun_derivs[x1_ind].append(next_deriv)
+#     return eval_fun_derivs
 
 
 def _contract_tensor(deriv_array, dx1s, dx2s):
@@ -678,10 +679,6 @@ class ForwardModeDerivativeArray():
                 raise ValueError('`dx1s` and `dx2s` must be lists of vectors.')
 
         return self._eval_fun_derivs[order1][order2](x1, x2, *[*dx1s, *dx2s])
-        # if len(dx1s) + len(dx2s) >= 1:
-        #     return self._eval_fun_derivs[order1][order2](x1, x2)
-        # else:
-        #     return self._eval_fun_derivs[order1][order2](x1, x2)
 
 
 class ReverseModeDerivativeArray():
@@ -929,7 +926,7 @@ class ParametricSensitivityTaylorExpansion(object):
 
         # You need one more gradient derivative than the order of the Taylor
         # approximation.
-        self._eval_g_derivs = _generate_two_term_fwd_derivative_array(
+        self._deriv_array = ForwardModeDerivativeArray(
             self._objective_function_eta_grad,
             order1=self._order + 1,
             order2=self._order + 2)
@@ -981,7 +978,8 @@ class ParametricSensitivityTaylorExpansion(object):
                         eps0=self._hyper_val0,
                         deps=dhyper,
                         eta_derivs=input_derivs,
-                        eval_g_derivs=self._eval_g_derivs)
+                        eval_directional_derivative= \
+                            self._deriv_array.eval_directional_derivative)
         return -1 * self.hess_solver.solve(vec)
 
 

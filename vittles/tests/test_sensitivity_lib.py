@@ -341,9 +341,10 @@ class TestDerivativeTerm(unittest.TestCase):
             model.get_flat_true_optimal_theta(True, True)
 
         obj_eta_grad = autograd.grad(objective, argnum=0)
-        eval_g_derivs = \
-            sensitivity_lib._generate_two_term_fwd_derivative_array(
-                obj_eta_grad, order1=2, order2=2)
+        deriv_array = \
+            ForwardModeDerivativeArray(obj_eta_grad, order1=2, order2=2)
+        eval_directional_derivative = \
+            deriv_array.eval_directional_derivative
 
         eps1 = eps0 + 1e-1
         eta1 = get_true_optimal_flat_theta(eps1)
@@ -370,14 +371,16 @@ class TestDerivativeTerm(unittest.TestCase):
             dterm.prefactor * d2g_deta_deps(
                 eta0, eps0, true_deta_deps(eps0) @  deps, deps),
             _evaluate_term_fwd(
-                dterm, eta0, eps0, deps, eta_derivs, eval_g_derivs))
+                dterm, eta0, eps0, deps, eta_derivs,
+                eval_directional_derivative))
 
         dterms1 = sensitivity_lib._get_taylor_base_terms()
         deriv_terms = [ true_deta_deps(eps0) @ deps ]
         assert_array_almost_equal(
             dg_deps(eta0, eps0, deps),
             _evaluate_term_fwd(
-                dterms1[0], eta0, eps0, deps, deriv_terms, eval_g_derivs))
+                dterms1[0], eta0, eps0, deps, deriv_terms,
+                eval_directional_derivative))
 
 
 class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
