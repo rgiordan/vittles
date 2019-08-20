@@ -431,6 +431,9 @@ class DerivativeTerm:
 
         # Derived quantities.
 
+        # The total number of eta partials.
+        self.total_eta_order = np.sum(self.eta_orders)
+
         # The order is the total number of epsilon derivatives.
         self._order = int(
             self.eps_order + \
@@ -779,7 +782,9 @@ class ParametricSensitivityTaylorExpansion(object):
     def __init__(self, objective_function,
                  input_val0, hyper_val0, order,
                  hess0=None,
-                 hyper_par_objective_function=None):
+                 hyper_par_objective_function=None,
+                 forward_mode=True,
+                 max_input_order=None, max_hyper_order=None):
         """
         Parameters
         ------------------
@@ -805,7 +810,27 @@ class ParametricSensitivityTaylorExpansion(object):
             ``hyper_par_objective_function`` the
             necessary calculations can be more efficient.  If
             unset, ``objective_function`` is used.
+        forward_mode : `bool`
+            Optional.  If `True` (the default), use forward-mode automatic
+            differentiation.  Otherwise, use reverse-mode.
+        max_input_order : `int`
+            Optional.  The maximum number of nonzero partial derivatives of
+            the objective function gradient with respect to the input parameter.
+            If `None`, calculate partial derivatives of all orders.
+        max_hyper_order : `int`
+            Optional.  The maximum number of nonzero partial derivatives of
+            the objective function gradient with respect to the hyperparameter.
+            If `None`, calculate partial derivatives of all orders.
         """
+
+        self._max_input_order = max_input_order
+        self._max_hyper_order = max_hyper_order
+        self._forward_mode = forward_mode
+
+        if self._max_input_order is not None and self._max_input_order < 1:
+            raise ValueError('max_input_order must be >= 1.')
+        if self._max_hyper_order is not None and self._max_hyper_order < 1:
+            raise ValueError('max_hyper_order must be >= 1.')
 
         self._objective_function = objective_function
         self._objective_function_hessian = \
@@ -841,6 +866,8 @@ class ParametricSensitivityTaylorExpansion(object):
         self._input_val0 = deepcopy(input_val0)
         self._hyper_val0 = deepcopy(hyper_val0)
 
+        # TODO: if using reverse mode, set the other derivatives here.
+
         if hess0 is None:
             self._hess0 = \
                 self._objective_function_hessian(
@@ -869,10 +896,12 @@ class ParametricSensitivityTaylorExpansion(object):
 
         # You need one more gradient derivative than the order of the Taylor
         # approximation.
+        order1 = min(self._order + 1, self._max_input_order)
+        order2 = min(self._order + 2, self._max_hyper_order)
         self._deriv_array = ForwardModeDerivativeArray(
             self._objective_function_eta_grad,
-            order1=self._order + 1,
-            order2=self._order + 2)
+            order1=order1,
+            order2=order2)
 
         self._taylor_terms_list = [ _get_taylor_base_terms() ]
         for k in range(1, self._order):
@@ -899,7 +928,7 @@ class ParametricSensitivityTaylorExpansion(object):
 
         Returns
         ------------
-            The value of the k^th derivative in the directoin dhyper.
+            The value of the k^th derivative in the direction dhyper.
         """
         if k <= 0:
             raise ValueError('k must be at least one.')
@@ -914,15 +943,25 @@ class ParametricSensitivityTaylorExpansion(object):
             # Exclude the highest order eta derivative -- this what
             # we are trying to calculate.
             if (term.eta_orders[-1] == 0):
-                vec += \
-                    _evaluate_term_fwd(
-                        term=term,
-                        eta0=self._input_val0,
-                        eps0=self._hyper_val0,
-                        deps=dhyper,
-                        eta_derivs=input_derivs,
-                        eval_directional_derivative= \
-                            self._deriv_array.eval_directional_derivative)
+                continue
+
+            # Assume that epsilon partials higher than this are zero.
+            if term.eps_order > self._max_hyper_order:
+                continue
+
+            # Assume that eta partials higher than this are zero.
+            if term.total_eta_order > self._max_input_order:
+                continue
+
+            vec += \
+                _evaluate_term_fwd(
+                    term=term,
+                    eta0=self._input_val0,
+                    eps0=self._hyper_val0,
+                    deps=dhyper,
+                    eta_derivs=input_derivs,
+                    eval_directional_derivative= \
+                        self._deriv_array.eval_directional_derivative)
         return -1 * self.hess_solver.solve(vec)
 
 
