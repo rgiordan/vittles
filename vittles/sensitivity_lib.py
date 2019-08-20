@@ -636,6 +636,54 @@ def _contract_tensor(deriv_array, dx1s, dx2s):
     return np.einsum(einsum_str, deriv_array, *(dx1s + dx2s))
 
 
+class ForwardModeDerivativeArray():
+    def __init__(self, fun, order1, order2):
+        self._order1 = order1
+        self._order2 = order2
+
+        self._eval_fun_derivs = [[ fun ]]
+        for x1_ind in range(self._order1 + 1):
+            if x1_ind > 0: # The first row should be 0-th order x1 partials.
+                # Append one x1 derivative.
+                next_deriv = _append_jvp(
+                    self._eval_fun_derivs[x1_ind - 1][0],
+                    num_base_args=2, argnum=0)
+                self._eval_fun_derivs.append([ next_deriv ])
+            for x2_ind in range(self._order2):
+                # Append one x2 derivative.  Note that the array already contains
+                # a 0-th order x2 partial, and we are appending order2 new
+                # derivatives, for a max order of order2 in order2 + 1 columns.
+                next_deriv = _append_jvp(
+                    self._eval_fun_derivs[x1_ind][x2_ind],
+                    num_base_args=2, argnum=1)
+                self._eval_fun_derivs[x1_ind].append(next_deriv)
+
+    def eval_directional_derivative(self, x1, x2, dx1s, dx2s, check=True):
+        """Evaluate the directional derivative in the directions
+        dx1s[0] ..., dx1s[N_1], dx2s[0], ..., dx2s[N_2].
+        """
+
+        order1 = len(dx1s)
+        order2 = len(dx2s)
+        if check:
+            if order1 > self._order1:
+                raise ValueError(
+                    'The number of `dx1s` () must be <= order1 = {}'.format(
+                        order1, self._order1))
+            if order2 > self._order2:
+                raise ValueError(
+                    'The number of `dx2s` () must be <= order2 = {}'.format(
+                        order1, self._order1))
+            if (not isinstance(dx1s, list)) or (not isinstance(dx2s, list)):
+                raise ValueError('`dx1s` and `dx2s` must be lists of vectors.')
+
+        return self._eval_fun_derivs[order1][order2](x1, x2, *[*dx1s, *dx2s])
+        # if len(dx1s) + len(dx2s) >= 1:
+        #     return self._eval_fun_derivs[order1][order2](x1, x2)
+        # else:
+        #     return self._eval_fun_derivs[order1][order2](x1, x2)
+
+
 class ReverseModeDerivativeArray():
     def __init__(self, fun, order1, order2):
         self._order1 = order1
@@ -734,8 +782,7 @@ class ReverseModeDerivativeArray():
         # This keeps the first dimension of the partial derivative array,
         # and sums over the x1 first, then the x2.  This needs to match the
         # order in which the partial derivatives are taken in `__init__`.
-        deriv_array = self.deriv_arrays[order1][order2]
-        return _contract_tensor(deriv_array, dx1s, dx2s)
+        return _contract_tensor(self.deriv_arrays[order1][order2], dx1s, dx2s)
 
 
 def _consolidate_terms(dterms):

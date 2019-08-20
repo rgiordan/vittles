@@ -18,7 +18,7 @@ from vittles import sensitivity_lib
 from vittles import solver_lib
 from vittles.sensitivity_lib import \
     _append_jvp, _evaluate_term_fwd, DerivativeTerm, \
-    ReverseModeDerivativeArray
+    ReverseModeDerivativeArray, ForwardModeDerivativeArray
 
 class TestSystemSolver(unittest.TestCase):
     def test_solver(self):
@@ -43,7 +43,7 @@ class TestSystemSolver(unittest.TestCase):
 
 
 class TestForwardModederivativeArray(unittest.TestCase):
-    def test_generate_two_term_fwd_derivative_array(self):
+    def test_fwd_derivative_array(self):
         model = QuadraticModel(dim=3)
 
         eta0, eps0 = model.get_default_flat_values(True, True)
@@ -52,15 +52,16 @@ class TestForwardModederivativeArray(unittest.TestCase):
 
         max_order1 = 2
         max_order2 = 3
-        eval_g_derivs = \
-            sensitivity_lib._generate_two_term_fwd_derivative_array(
-                obj_eta_grad, order1=max_order1, order2=max_order2)
+        deriv_array = ForwardModeDerivativeArray(
+            obj_eta_grad, max_order1, max_order2)
 
         # n^th order derivatives require n + 1 entries, because the
         # 0-th order is included as well.
-        self.assertEqual(max_order1 + 1, len(eval_g_derivs))
-        for i in range(len(eval_g_derivs)):
-            self.assertEqual(max_order2 + 1, len(eval_g_derivs[i]))
+        self.assertEqual(max_order1 + 1, len(deriv_array._eval_fun_derivs))
+        for i in range(len(deriv_array._eval_fun_derivs)):
+            self.assertEqual(
+                max_order2 + 1,
+                len(deriv_array._eval_fun_derivs[i]))
 
         # Use autodiff's forward mode to check.
         dg_deta = sensitivity_lib._append_jvp(
@@ -77,37 +78,40 @@ class TestForwardModederivativeArray(unittest.TestCase):
             dg_deps, num_base_args=2, argnum=1)
 
         # Directions in eta
-        v1 = np.random.random(len(eta0))
-        v2 = np.random.random(len(eta0))
+        v = [ np.random.random(len(eta0)) for _ in range(max_order1) ]
 
         # Directions in eps
-        w1 = np.random.random(len(eps0))
-        w2 = np.random.random(len(eps0))
+        w = [ np.random.random(len(eps0)) for _ in range(max_order2) ]
 
         # Test the array entries
         assert_array_almost_equal(
             obj_eta_grad(eta0, eps0),
-            eval_g_derivs[0][0](eta0, eps0))
+            deriv_array.eval_directional_derivative(eta0, eps0, [], []))
 
         assert_array_almost_equal(
-            dg_deta(eta0, eps0, v1),
-            eval_g_derivs[1][0](eta0, eps0, v1))
+            dg_deta(eta0, eps0, v[0]),
+            deriv_array.eval_directional_derivative(
+                eta0, eps0, [v[0]], []))
 
         assert_array_almost_equal(
-            dg_deps(eta0, eps0, w1),
-            eval_g_derivs[0][1](eta0, eps0, w1))
+            dg_deps(eta0, eps0, w[0]),
+            deriv_array.eval_directional_derivative(
+                eta0, eps0, [], [w[0]]))
 
         assert_array_almost_equal(
-            d2g_deta_deta(eta0, eps0, v1, v2),
-            eval_g_derivs[2][0](eta0, eps0, v1, v2))
+            d2g_deta_deta(eta0, eps0, v[0], v[1]),
+            deriv_array.eval_directional_derivative(
+                eta0, eps0, [v[0], v[1]], []))
 
         assert_array_almost_equal(
-            d2g_deta_deps(eta0, eps0, v1, w1),
-            eval_g_derivs[1][1](eta0, eps0, v1, w1))
+            d2g_deta_deps(eta0, eps0, v[0], w[0]),
+            deriv_array.eval_directional_derivative(
+                eta0, eps0, [v[0]], [w[0]]))
 
         assert_array_almost_equal(
-            d2g_deps_deps(eta0, eps0, w1, w2),
-            eval_g_derivs[0][2](eta0, eps0, w1, w2))
+            d2g_deps_deps(eta0, eps0, w[0], w[1]),
+            deriv_array.eval_directional_derivative(
+                eta0, eps0, [], [w[0], w[1]]))
 
 
 class TestReverseModeDerivativeArray(unittest.TestCase):
@@ -128,8 +132,7 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
         def g(x1, x2):
             return 0.
 
-        deriv_array = ReverseModeDerivativeArray(
-            fun=g, order1=2, order2=2)
+        deriv_array = ReverseModeDerivativeArray(fun=g, order1=2, order2=2)
         x1 = np.zeros(1)
         x2 = np.zeros(1000)
         with self.assertRaises(ValueError):
