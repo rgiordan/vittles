@@ -822,10 +822,10 @@ class ParametricSensitivityTaylorExpansion(object):
             Optional.  The maximum number of nonzero partial derivatives of
             the objective function gradient with respect to the hyperparameter.
             If `None`, calculate partial derivatives of all orders.
+        force: `bool`
+            Optional.  If `True`, force the instantiation of potentially
+            expensive reverse mode derivative arrays.  Default is `False`.
         """
-
-        #self._objective_function = objective_function
-
         # In order to calculate derivatives d^kinput_dhyper^k, we will be
         # Taylor expanding the gradient of the objective with respect to eta.
         estimating_equation = autograd.grad(objective_function, argnum=0)
@@ -853,9 +853,6 @@ class ParametricSensitivityTaylorExpansion(object):
             max_hyper_order=max_hyper_order,
             force=force)
 
-        #self._set_order(order, max_input_order, max_hyper_order, forward_mode)
-        #self.set_base_values(input_val0, hyper_val0, hess0=hess0)
-
     def __init__(self,
                  estimating_equation,
                  input_val0, hyper_val0,
@@ -865,11 +862,6 @@ class ParametricSensitivityTaylorExpansion(object):
                  max_input_order=None,
                  max_hyper_order=None,
                  force=False):
-        """
-        Create a class instance with a custom initializations.  This
-        essentially bypasses the definition of the objective
-        function itself, its hessian, and set_base_values.
-        """
         self._input_val0 = deepcopy(input_val0)
         self._hyper_val0 = deepcopy(hyper_val0)
         self._objective_function_eta_grad = estimating_equation
@@ -881,47 +873,6 @@ class ParametricSensitivityTaylorExpansion(object):
             # TODO: don't duplicate the Hessian calculation?
             self._deriv_array.set_evaluation_location(
                 self._input_val0, self._hyper_val0, force=force)
-
-
-    def set_base_values(self, input_val0, hyper_val0, hess0=None, force=False):
-        """
-        Set the values at which the Taylor series is to be evaluated.
-
-        Parameters
-        ---------------
-        input_val0: `numpy.ndarray` (N,)
-            The value of input_par at the optimum.
-        hyper_val0: `numpy.ndarray` (M,)
-            The value of hyper_par at which input_val0 was found.
-        hess0: `numpy.ndarray` (N, N)
-            Optional.  The Hessian of the objective at (input_val0, hyper_val0).
-            If not specified it is calculated at initialization.
-        force: `bool`
-            Optional.  If `True`, force the instantiation of potentially
-            expensive reverse mode derivative arrays.  Default is `False`.
-        """
-        # self._input_val0 = deepcopy(input_val0)
-        # self._hyper_val0 = deepcopy(hyper_val0)
-        #
-        # if not self._forward_mode:
-        #     # Set the derivative arrays.
-        #     # TODO: don't duplicate the Hessian calculation?
-        #     self._deriv_array.set_evaluation_location(
-        #         self._input_val0, self._hyper_val0, force=force)
-
-        # if hess0 is None:
-        #     self._hess0 = \
-        #         self._objective_function_hessian(
-        #             self._input_val0, self._hyper_val0)
-        # else:
-        #     self._hess0 = hess0
-        #
-        # # TODO: if the objective function returns a 1-d array and not a
-        # # float then the Cholesky decomposition will fail because
-        # # the Hessian will have an extra dimension.  This is a confusing
-        # # error that we could catch explicitly at the cost of an extra
-        # # function evaluation.  Is it worth it?
-        # self.hess_solver = SystemSolver(self._hess0, 'factorization')
 
     def _set_order(self, order, max_input_order, max_hyper_order, forward_mode):
         """Generate the matrix of g partial derivatives and differentiate
