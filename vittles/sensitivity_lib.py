@@ -575,7 +575,7 @@ def _contract_tensor(deriv_array, dx1s, dx2s):
     if len(dx1s) + len(dx2s) >= len(ascii_lowercase):
         raise ValueError(
             'You cannot use _contract_tensor with so many vectors ' +
-            'because of the crazy way I decided to do this with einsum.')
+            'because of the crazy way rgiordan decided to do this with einsum.')
 
     ind_letters =  ascii_lowercase[0:(len(dx1s) + len(dx2s))]
     einsum_str = \
@@ -785,12 +785,18 @@ class ParametricSensitivityTaylorExpansion(object):
 
     .. note:: This class is experimental and should be used with caution.
     """
-    def __init__(self, objective_function,
-                 input_val0, hyper_val0, order,
-                 hess0=None,
-                 hyper_par_objective_function=None,
-                 forward_mode=True,
-                 max_input_order=None, max_hyper_order=None):
+    @classmethod
+    def optimization_objective(
+        cls,
+        objective_function,
+        input_val0,
+        hyper_val0,
+        order,
+        hess0=None,
+        forward_mode=True,
+        max_input_order=None,
+        max_hyper_order=None,
+        force=False):
         """
         Parameters
         ------------------
@@ -798,24 +804,72 @@ class ParametricSensitivityTaylorExpansion(object):
             The optimization objective as a function of two arguments
             (eta, eps), where eta is the parameter that is optimized and
             eps is a hyperparameter.
+        hess0 : `numpy.ndarray` (N, N)
+            Optional.  The Hessian of the objective at
+            (``input_val0``, ``hyper_val0``).
+            If not specified it is calculated at initialization.
+        The remaining arguments are the same as for the `__init__` method.
+        """
+        # In order to calculate derivatives d^kinput_dhyper^k, we will be
+        # Taylor expanding the gradient of the objective with respect to eta.
+        estimating_equation = autograd.grad(objective_function, argnum=0)
+
+        if hess0 is None:
+            objective_function_hessian = \
+                autograd.hessian(objective_function, argnum=0)
+            hess0 = objective_function_hessian(input_val0, hyper_val0)
+
+        # TODO: if the objective function returns a 1-d array and not a
+        # float then the Cholesky decomposition will fail because
+        # the Hessian will have an extra dimension.  This is a confusing
+        # error that we could catch explicitly at the cost of an extra
+        # function evaluation.  Is it worth it?
+        hess_solver = SystemSolver(hess0, 'factorization')
+
+        return cls(
+            estimating_equation=estimating_equation,
+            input_val0=input_val0,
+            hyper_val0=hyper_val0,
+            order=order,
+            hess_solver=hess_solver,
+            forward_mode=forward_mode,
+            max_input_order=max_input_order,
+            max_hyper_order=max_hyper_order,
+            force=force)
+
+    def __init__(self,
+                 estimating_equation,
+                 input_val0, hyper_val0,
+                 order,
+                 hess_solver,
+                 forward_mode=True,
+                 max_input_order=None,
+                 max_hyper_order=None,
+                 force=False):
+        """
+        Parameters
+        ------------------
+        estimating_equation : `callable`
+            A vector-valued function function of two arguments,
+            (`input`, `output`), where the length of the vector is the same
+            as the length of `input`, and which is (approximately) the zero
+            vector when evaluated at (`input_val0`, `hyper_val0`).
         input_val0 : `numpy.ndarray` (N,)
             The value of ``input_par`` at the optimum.
         hyper_val0 : `numpy.ndarray` (M,)
             The value of ``hyper_par`` at which ``input_val0`` was found.
         order : `int`
             The maximum order of the Taylor series to be calculated.
-        hess0 : `numpy.ndarray` (N, N)
-            Optional.  The Hessian of the objective at
-            (``input_val0``, ``hyper_val0``).
-            If not specified it is calculated at initialization.
-        hyper_par_objective_function : `callable`
-            Optional.  A function containing the dependence
-            of ``objective_function`` on the hyperparameter.  Sometimes
-            only a small, easily calculated part of the objective depends
-            on the hyperparameter, and by specifying
-            ``hyper_par_objective_function`` the
-            necessary calculations can be more efficient.  If
-            unset, ``objective_function`` is used.
+        hess_solver : `SystemSolver`
+            A class that implements a solution to the linear system
+
+            .. math::
+
+                \\frac{\\partial G}{\\partial \\eta}^{-1} v,
+
+            where :math:`G(\\eta, \\epsilon)` is the estimating equation,
+            and the partial derivative is evaluated at
+            :math:`(\\eta, \\epsilon) =`  (`input_val0`, `hyper_val0`).
         forward_mode : `bool`
             Optional.  If `True` (the default), use forward-mode automatic
             differentiation.  Otherwise, use reverse-mode.
@@ -827,8 +881,26 @@ class ParametricSensitivityTaylorExpansion(object):
             Optional.  The maximum number of nonzero partial derivatives of
             the objective function gradient with respect to the hyperparameter.
             If `None`, calculate partial derivatives of all orders.
+        force: `bool`
+            Optional.  If `True`, force the instantiation of potentially
+            expensive reverse mode derivative arrays.  Default is `False`.
         """
+        self._input_val0 = deepcopy(input_val0)
+        self._hyper_val0 = deepcopy(hyper_val0)
+        self._objective_function_eta_grad = estimating_equation
+        self._set_order(order, max_input_order, max_hyper_order, forward_mode)
+        self.hess_solver = hess_solver
 
+        if not self._forward_mode:
+            # Set the derivative arrays.
+            # TODO: don't duplicate the Hessian calculation?
+            self._deriv_array.set_evaluation_location(
+                self._input_val0, self._hyper_val0, force=force)
+
+    def _set_order(self, order, max_input_order, max_hyper_order, forward_mode):
+        """Generate the matrix of g partial derivatives and differentiate
+        the Taylor series up to the required order.
+        """
         self._max_input_order = max_input_order
         self._max_hyper_order = max_hyper_order
         self._forward_mode = forward_mode
@@ -846,75 +918,6 @@ class ParametricSensitivityTaylorExpansion(object):
         if self._max_hyper_order is not None and self._max_hyper_order < 1:
             raise ValueError('max_hyper_order must be >= 1.')
 
-        self._objective_function = objective_function
-        self._objective_function_hessian = \
-            autograd.hessian(self._objective_function, argnum=0)
-
-        # In order to calculate derivatives d^kinput_dhyper^k, we will be
-        # Taylor expanding the gradient of the objective with respect to eta.
-        self._objective_function_eta_grad = \
-            autograd.grad(self._objective_function, argnum=0)
-
-        if hyper_par_objective_function is None:
-            self._hyper_par_objective_function = self._objective_function
-        else:
-            self._hyper_par_objective_function = hyper_par_objective_function
-
-        self._set_order(order)
-        self.set_base_values(input_val0, hyper_val0, hess0=hess0)
-
-    def set_base_values(self, input_val0, hyper_val0, hess0=None, force=False):
-        """
-        Set the values at which the Taylor series is to be evaluated.
-
-        Parameters
-        ---------------
-        input_val0: `numpy.ndarray` (N,)
-            The value of input_par at the optimum.
-        hyper_val0: `numpy.ndarray` (M,)
-            The value of hyper_par at which input_val0 was found.
-        hess0: `numpy.ndarray` (N, N)
-            Optional.  The Hessian of the objective at (input_val0, hyper_val0).
-            If not specified it is calculated at initialization.
-        force: `bool`
-            Optional.  If `True`, force the instantiation of potentially
-            expensive reverse mode derivative arrays.  Default is `False`.
-        """
-        self._input_val0 = deepcopy(input_val0)
-        self._hyper_val0 = deepcopy(hyper_val0)
-
-        if not self._forward_mode:
-            # Set the derivative arrays.
-            # TODO: don't duplicate the Hessian calculation?
-            self._deriv_array.set_evaluation_location(
-                self._input_val0, self._hyper_val0, force=force)
-
-        # TODO: if using reverse mode, set the other derivatives here.
-
-        if hess0 is None:
-            self._hess0 = \
-                self._objective_function_hessian(
-                    self._input_val0, self._hyper_val0)
-        else:
-            self._hess0 = hess0
-
-        # TODO: if the objective function returns a 1-d array and not a
-        # float then the Cholesky decomposition will fail because
-        # the Hessian will have an extra dimension.  This is a confusing
-        # error that we could catch explicitly at the cost of an extra
-        # function evaluation.  Is it worth it?
-        self.hess_solver = SystemSolver(self._hess0, 'factorization')
-
-    def _differentiate_terms(self, dterms):
-        dterms_derivs = []
-        for term in dterms:
-            dterms_derivs += term.differentiate()
-        return _consolidate_terms(dterms_derivs)
-
-    def _set_order(self, order):
-        """Generate the matrix of g partial derivatives and differentiate
-        the Taylor series up to the required order.
-        """
         self._order = order
 
         # You need one more gradient derivative than the order of the Taylor
@@ -940,10 +943,16 @@ class ParametricSensitivityTaylorExpansion(object):
                 order1=order1,
                 order2=order2)
 
+        def differentiate_terms(dterms):
+            dterms_derivs = []
+            for term in dterms:
+                dterms_derivs += term.differentiate()
+            return _consolidate_terms(dterms_derivs)
+
         self._taylor_terms_list = [ _get_taylor_base_terms() ]
         for k in range(1, self._order):
             next_taylor_terms = \
-                self._differentiate_terms(self._taylor_terms_list[k - 1])
+                differentiate_terms(self._taylor_terms_list[k - 1])
             self._taylor_terms_list.append(next_taylor_terms)
 
     def get_max_order(self):
@@ -1009,6 +1018,10 @@ class ParametricSensitivityTaylorExpansion(object):
         """
         if max_order is None:
             max_order = self._order
+        if max_order > self._order:
+            raise ValueError(
+                '`max_order` must be no greater than the order {}'.format(
+                    self._order))
         input_derivs = []
         for k in range(1, max_order + 1):
             dinputk_dhyperk = \

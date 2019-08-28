@@ -14,12 +14,13 @@ class SystemSolver:
         h : `numpy.ndarray` or `scipy.sparse` matrix
             The "Hessian" matrix for sensitivity analysis.
         method : {'factorization', 'cg'}
-            How to solve the system.  `factorization` uses a Cholesky decomposition,
-            and `cg` uses conjugate gradient.
+            How to solve the system.  `factorization` uses a Cholesky
+            decomposition, and `cg` uses conjugate gradient.
         """
         self.__valid_methods = [ 'factorization', 'cg' ]
         if method not in self.__valid_methods:
-            raise ValueError('method must be one of {}'.format(self.__valid_methods))
+            raise ValueError('method must be one of {}'.format(
+                self.__valid_methods))
         self._method = method
         self.set_h(h)
         self.set_cg_options({})
@@ -46,8 +47,8 @@ class SystemSolver:
         -------------
         cg_opts : `dict`
             A dictionary of keyword options to be passed to
-            `scipy.sparse.linalg.cg`.  If ``method`` is not ``cg``, these will be
-            ignored.
+            `scipy.sparse.linalg.cg`.  If ``method`` is not ``cg``, these
+            will be ignored.
         """
         self._cg_opts = cg_opts
 
@@ -73,7 +74,8 @@ class SystemSolver:
             cg_result = sp.sparse.linalg.cg(
                 self._linop, v, **self._cg_opts, atol='legacy')
             if cg_result[1] != 0:
-                warnings.warn('CG exited with error code {}'.format(cg_result[1]))
+                warnings.warn(
+                    'CG exited with error code {}'.format(cg_result[1]))
             return cg_result[0]
 
         else:
