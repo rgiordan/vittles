@@ -575,7 +575,7 @@ def _contract_tensor(deriv_array, dx1s, dx2s):
     if len(dx1s) + len(dx2s) >= len(ascii_lowercase):
         raise ValueError(
             'You cannot use _contract_tensor with so many vectors ' +
-            'because of the crazy way I decided to do this with einsum.')
+            'because of the crazy way rgiordan decided to do this with einsum.')
 
     ind_letters =  ascii_lowercase[0:(len(dx1s) + len(dx2s))]
     einsum_str = \
@@ -787,8 +787,11 @@ class ParametricSensitivityTaylorExpansion(object):
     """
     @classmethod
     def optimization_objective(
-        cls, objective_function,
-        input_val0, hyper_val0, order,
+        cls,
+        objective_function,
+        input_val0,
+        hyper_val0,
+        order,
         hess0=None,
         forward_mode=True,
         max_input_order=None,
@@ -801,30 +804,11 @@ class ParametricSensitivityTaylorExpansion(object):
             The optimization objective as a function of two arguments
             (eta, eps), where eta is the parameter that is optimized and
             eps is a hyperparameter.
-        input_val0 : `numpy.ndarray` (N,)
-            The value of ``input_par`` at the optimum.
-        hyper_val0 : `numpy.ndarray` (M,)
-            The value of ``hyper_par`` at which ``input_val0`` was found.
-        order : `int`
-            The maximum order of the Taylor series to be calculated.
         hess0 : `numpy.ndarray` (N, N)
             Optional.  The Hessian of the objective at
             (``input_val0``, ``hyper_val0``).
             If not specified it is calculated at initialization.
-        forward_mode : `bool`
-            Optional.  If `True` (the default), use forward-mode automatic
-            differentiation.  Otherwise, use reverse-mode.
-        max_input_order : `int`
-            Optional.  The maximum number of nonzero partial derivatives of
-            the objective function gradient with respect to the input parameter.
-            If `None`, calculate partial derivatives of all orders.
-        max_hyper_order : `int`
-            Optional.  The maximum number of nonzero partial derivatives of
-            the objective function gradient with respect to the hyperparameter.
-            If `None`, calculate partial derivatives of all orders.
-        force: `bool`
-            Optional.  If `True`, force the instantiation of potentially
-            expensive reverse mode derivative arrays.  Default is `False`.
+        The remaining arguments are the same as for the `__init__` method.
         """
         # In order to calculate derivatives d^kinput_dhyper^k, we will be
         # Taylor expanding the gradient of the objective with respect to eta.
@@ -862,6 +846,45 @@ class ParametricSensitivityTaylorExpansion(object):
                  max_input_order=None,
                  max_hyper_order=None,
                  force=False):
+        """
+        Parameters
+        ------------------
+        estimating_equation : `callable`
+            A vector-valued function function of two arguments,
+            (`input`, `output`), where the length of the vector is the same
+            as the length of `input`, and which is (approximately) the zero
+            vector when evaluated at (`input_val0`, `hyper_val0`).
+        input_val0 : `numpy.ndarray` (N,)
+            The value of ``input_par`` at the optimum.
+        hyper_val0 : `numpy.ndarray` (M,)
+            The value of ``hyper_par`` at which ``input_val0`` was found.
+        order : `int`
+            The maximum order of the Taylor series to be calculated.
+        hess_solver : `SystemSolver`
+            A class that implements a solution to the linear system
+
+            .. math::
+
+                \\frac{\\partial G}{\\partial \\eta}^{-1} v,
+
+            where :math:`G(\\eta, \\epsilon)` is the estimating equation,
+            and the partial derivative is evaluated at
+            :math:`(\\eta, \\epsilon) =`  (`input_val0`, `hyper_val0`).
+        forward_mode : `bool`
+            Optional.  If `True` (the default), use forward-mode automatic
+            differentiation.  Otherwise, use reverse-mode.
+        max_input_order : `int`
+            Optional.  The maximum number of nonzero partial derivatives of
+            the objective function gradient with respect to the input parameter.
+            If `None`, calculate partial derivatives of all orders.
+        max_hyper_order : `int`
+            Optional.  The maximum number of nonzero partial derivatives of
+            the objective function gradient with respect to the hyperparameter.
+            If `None`, calculate partial derivatives of all orders.
+        force: `bool`
+            Optional.  If `True`, force the instantiation of potentially
+            expensive reverse mode derivative arrays.  Default is `False`.
+        """
         self._input_val0 = deepcopy(input_val0)
         self._hyper_val0 = deepcopy(hyper_val0)
         self._objective_function_eta_grad = estimating_equation
