@@ -18,29 +18,8 @@ from vittles import sensitivity_lib
 from vittles import solver_lib
 from vittles.sensitivity_lib import \
     _append_jvp, _evaluate_term_fwd, DerivativeTerm, \
-    ReverseModeDerivativeArray, ForwardModeDerivativeArray
-
-class TestSystemSolver(unittest.TestCase):
-    def test_solver(self):
-        np.random.seed(101)
-        d = 10
-        h_dense = np.random.random((d, d))
-        h_dense = h_dense + h_dense.T + d * np.eye(d)
-        h_sparse = sp.sparse.csc_matrix(h_dense)
-        v = np.random.random(d)
-        h_inv_v = np.linalg.solve(h_dense, v)
-
-        for h in [h_dense, h_sparse]:
-            for method in ['factorization', 'cg']:
-                h_solver = solver_lib.SystemSolver(h, method)
-                assert_array_almost_equal(h_solver.solve(v), h_inv_v)
-
-        h_solver = solver_lib.SystemSolver(h_dense, 'cg')
-        h_solver.set_cg_options({'maxiter': 1})
-        with self.assertWarns(UserWarning):
-            # With only one iteration, the CG should fail and raise a warning.
-            h_solver.solve(v)
-
+    ReverseModeDerivativeArray, ForwardModeDerivativeArray, \
+    ParametricSensitivityTaylorExpansion
 
 class TestForwardModederivativeArray(unittest.TestCase):
     def test_fwd_derivative_array(self):
@@ -557,10 +536,11 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
 
 class TestTaylorExpansion(unittest.TestCase):
     def test_taylor_series(self):
-        self._test_taylor_series(use_hess=True)
-        self._test_taylor_series(use_hess=False)
+        self._test_taylor_series(use_hess=True, custom_solver=False)
+        self._test_taylor_series(use_hess=False, custom_solver=False)
+        self._test_taylor_series(use_hess=False, custom_solver=True)
 
-    def _test_taylor_series(self, use_hess):
+    def _test_taylor_series(self, use_hess, custom_solver):
         #################################
         # Set up the ground truth.
 
@@ -579,28 +559,35 @@ class TestTaylorExpansion(unittest.TestCase):
         obj_eta_hessian = autograd.hessian(objective, argnum=0)
         hess0 = obj_eta_hessian(eta0, eps0)
 
-        if use_hess:
-            hess0_arg = hess0
-        else:
-            hess0_arg = None
-
         test_order = 3
-        taylor_expansion = \
-            sensitivity_lib.ParametricSensitivityTaylorExpansion(
-                objective_function=objective,
-                input_val0=eta0,
-                hyper_val0=eps0,
-                order=test_order,
-                hess0=hess0_arg)
+        if custom_solver:
+            estimating_equation = autograd.grad(objective, argnum=0)
+            solver = solver_lib.SystemSolver(hess0, 'cg')
+            taylor_expansion = \
+                ParametricSensitivityTaylorExpansion(
+                    estimating_equation=estimating_equation,
+                    input_val0=eta0,
+                    hyper_val0=eps0,
+                    order=test_order,
+                    hess_solver=solver)
+        else:
+            if use_hess:
+                hess0_arg = hess0
+            else:
+                hess0_arg = None
+
+            taylor_expansion = \
+                ParametricSensitivityTaylorExpansion.optimization_objective(
+                        objective_function=objective,
+                        input_val0=eta0,
+                        hyper_val0=eps0,
+                        order=test_order,
+                        hess0=hess0_arg)
 
         self.assertEqual(test_order, taylor_expansion.get_max_order())
         taylor_expansion.print_terms(k=3)
 
         # Get the exact derivatives using the closed-form optimum.
-
-        # obj_eta_grad = autograd.grad(objective, argnum=0)
-        # obj_eps_grad = autograd.grad(objective, argnum=1)
-        #obj_eps_hessian = autograd.hessian(objective, argnum=1)
 
         eps1 = eps0 + 1e-1
         eta1 = model.get_true_optimal_theta(eps1)
@@ -678,7 +665,7 @@ class TestTaylorExpansion(unittest.TestCase):
         hess0 = np.diag(np.array([2.1, 4.5]))
 
         taylor_expansion_truth = \
-            sensitivity_lib.ParametricSensitivityTaylorExpansion(
+            ParametricSensitivityTaylorExpansion.optimization_objective(
                 objective_function=objective,
                 input_val0=eta0,
                 hyper_val0=eps0,
@@ -686,7 +673,7 @@ class TestTaylorExpansion(unittest.TestCase):
                 order=test_order)
 
         taylor_expansion_test = \
-            sensitivity_lib.ParametricSensitivityTaylorExpansion(
+            ParametricSensitivityTaylorExpansion.optimization_objective(
                 objective_function=objective,
                 input_val0=eta0,
                 hyper_val0=eps0,
@@ -737,7 +724,7 @@ class TestTaylorExpansion(unittest.TestCase):
                 run_regression(w1 + dw), w1 + dw)) < 1e-8)
 
         taylor_expansion = \
-            sensitivity_lib.ParametricSensitivityTaylorExpansion(
+            ParametricSensitivityTaylorExpansion.optimization_objective(
                 objective_function=objective,
                 input_val0=theta0,
                 hyper_val0=w1,

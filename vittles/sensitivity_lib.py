@@ -785,11 +785,15 @@ class ParametricSensitivityTaylorExpansion(object):
 
     .. note:: This class is experimental and should be used with caution.
     """
-    def __init__(self, objective_function,
-                 input_val0, hyper_val0, order,
-                 hess0=None,
-                 forward_mode=True,
-                 max_input_order=None, max_hyper_order=None):
+    @classmethod
+    def optimization_objective(
+        cls, objective_function,
+        input_val0, hyper_val0, order,
+        hess0=None,
+        forward_mode=True,
+        max_input_order=None,
+        max_hyper_order=None,
+        force=False):
         """
         Parameters
         ------------------
@@ -820,29 +824,47 @@ class ParametricSensitivityTaylorExpansion(object):
             If `None`, calculate partial derivatives of all orders.
         """
 
-        self._objective_function = objective_function
-        self._objective_function_hessian = \
-            autograd.hessian(self._objective_function, argnum=0)
+        #self._objective_function = objective_function
 
         # In order to calculate derivatives d^kinput_dhyper^k, we will be
         # Taylor expanding the gradient of the objective with respect to eta.
-        self._objective_function_eta_grad = \
-            autograd.grad(self._objective_function, argnum=0)
+        estimating_equation = autograd.grad(objective_function, argnum=0)
 
-        # TODO: implement a hyper_par_objective_function for this class.
+        if hess0 is None:
+            objective_function_hessian = \
+                autograd.hessian(objective_function, argnum=0)
+            hess0 = objective_function_hessian(input_val0, hyper_val0)
 
-        self._set_order(order, max_input_order, max_hyper_order, forward_mode)
-        self.set_base_values(input_val0, hyper_val0, hess0=hess0)
+        # TODO: if the objective function returns a 1-d array and not a
+        # float then the Cholesky decomposition will fail because
+        # the Hessian will have an extra dimension.  This is a confusing
+        # error that we could catch explicitly at the cost of an extra
+        # function evaluation.  Is it worth it?
+        hess_solver = SystemSolver(hess0, 'factorization')
 
-    @classmethod
-    def custom_init(cls,
-                    input_val0, hyper_val0,
-                    objective_function_eta_grad,
-                    hess_solver,
-                    forward_mode=True,
-                    max_input_order=None,
-                    max_hyper_order=None,
-                    force=False):
+        return cls(
+            estimating_equation=estimating_equation,
+            input_val0=input_val0,
+            hyper_val0=hyper_val0,
+            order=order,
+            hess_solver=hess_solver,
+            forward_mode=forward_mode,
+            max_input_order=max_input_order,
+            max_hyper_order=max_hyper_order,
+            force=force)
+
+        #self._set_order(order, max_input_order, max_hyper_order, forward_mode)
+        #self.set_base_values(input_val0, hyper_val0, hess0=hess0)
+
+    def __init__(self,
+                 estimating_equation,
+                 input_val0, hyper_val0,
+                 order,
+                 hess_solver,
+                 forward_mode=True,
+                 max_input_order=None,
+                 max_hyper_order=None,
+                 force=False):
         """
         Create a class instance with a custom initializations.  This
         essentially bypasses the definition of the objective
@@ -850,7 +872,7 @@ class ParametricSensitivityTaylorExpansion(object):
         """
         self._input_val0 = deepcopy(input_val0)
         self._hyper_val0 = deepcopy(hyper_val0)
-        self._objective_function_eta_grad = objective_function_eta_grad
+        self._objective_function_eta_grad = estimating_equation
         self._set_order(order, max_input_order, max_hyper_order, forward_mode)
         self.hess_solver = hess_solver
 
@@ -878,28 +900,28 @@ class ParametricSensitivityTaylorExpansion(object):
             Optional.  If `True`, force the instantiation of potentially
             expensive reverse mode derivative arrays.  Default is `False`.
         """
-        self._input_val0 = deepcopy(input_val0)
-        self._hyper_val0 = deepcopy(hyper_val0)
+        # self._input_val0 = deepcopy(input_val0)
+        # self._hyper_val0 = deepcopy(hyper_val0)
+        #
+        # if not self._forward_mode:
+        #     # Set the derivative arrays.
+        #     # TODO: don't duplicate the Hessian calculation?
+        #     self._deriv_array.set_evaluation_location(
+        #         self._input_val0, self._hyper_val0, force=force)
 
-        if not self._forward_mode:
-            # Set the derivative arrays.
-            # TODO: don't duplicate the Hessian calculation?
-            self._deriv_array.set_evaluation_location(
-                self._input_val0, self._hyper_val0, force=force)
-
-        if hess0 is None:
-            self._hess0 = \
-                self._objective_function_hessian(
-                    self._input_val0, self._hyper_val0)
-        else:
-            self._hess0 = hess0
-
-        # TODO: if the objective function returns a 1-d array and not a
-        # float then the Cholesky decomposition will fail because
-        # the Hessian will have an extra dimension.  This is a confusing
-        # error that we could catch explicitly at the cost of an extra
-        # function evaluation.  Is it worth it?
-        self.hess_solver = SystemSolver(self._hess0, 'factorization')
+        # if hess0 is None:
+        #     self._hess0 = \
+        #         self._objective_function_hessian(
+        #             self._input_val0, self._hyper_val0)
+        # else:
+        #     self._hess0 = hess0
+        #
+        # # TODO: if the objective function returns a 1-d array and not a
+        # # float then the Cholesky decomposition will fail because
+        # # the Hessian will have an extra dimension.  This is a confusing
+        # # error that we could catch explicitly at the cost of an extra
+        # # function evaluation.  Is it worth it?
+        # self.hess_solver = SystemSolver(self._hess0, 'factorization')
 
     def _set_order(self, order, max_input_order, max_hyper_order, forward_mode):
         """Generate the matrix of g partial derivatives and differentiate
@@ -1022,6 +1044,10 @@ class ParametricSensitivityTaylorExpansion(object):
         """
         if max_order is None:
             max_order = self._order
+        if max_order > self._order:
+            raise ValueError(
+                '`max_order` must be no greater than the order {}'.format(
+                    self._order))
         input_derivs = []
         for k in range(1, max_order + 1):
             dinputk_dhyperk = \
