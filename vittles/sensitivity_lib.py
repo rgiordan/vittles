@@ -922,15 +922,24 @@ class ParametricSensitivityTaylorExpansion(object):
 
         # You need one more gradient derivative than the order of the Taylor
         # approximation.
+        # if self._max_input_order is None:
+        #     order1 = self._order + 1
+        # else:
+        #     order1 = min(self._order + 1, self._max_input_order)
         if self._max_input_order is None:
-            order1 = self._order + 1
+            order1 = self._order
         else:
-            order1 = min(self._order + 1, self._max_input_order)
+            order1 = min(self._order, self._max_input_order)
+
+        # if self._max_hyper_order is None:
+        #     order2 = self._order + 2
+        # else:
+        #     order2 = min(self._order + 2, self._max_hyper_order)
 
         if self._max_hyper_order is None:
-            order2 = self._order + 2
+            order2 = self._order
         else:
-            order2 = min(self._order + 2, self._max_hyper_order)
+            order2 = min(self._order, self._max_hyper_order)
 
         if self._forward_mode:
             self._deriv_array = ForwardModeDerivativeArray(
