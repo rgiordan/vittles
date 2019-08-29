@@ -4,6 +4,7 @@ from scipy.linalg import cho_factor, cho_solve
 import warnings
 
 
+# TODO: deprecate this, and just pass in a function rather than a class.
 class SystemSolver:
     """A class to provide a common interface for solving :math:`H^{-1} g`.
     """

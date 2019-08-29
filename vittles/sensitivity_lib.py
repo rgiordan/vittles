@@ -662,9 +662,9 @@ class ReverseModeDerivativeArray():
         if x1.ndim != 1 or x2.ndim != 1:
             raise ValueError('x1 and x2 must be 1d arrays.')
 
-        self.deriv_arrays = \
+        self._deriv_arrays = \
             [[ np.atleast_1d(self._eval_deriv_arrays[0][0](x1, x2)) ]]
-        dim0 = len(self.deriv_arrays[0][0])
+        dim0 = len(self._deriv_arrays[0][0])
         dim1 = len(x1)
         dim2 = len(x2)
         total_size = 0
@@ -692,11 +692,11 @@ class ReverseModeDerivativeArray():
         # Save the location at which the partial derivatives are evaluated.
         self._x1 = deepcopy(x1)
         self._x2 = deepcopy(x2)
-        if self.deriv_arrays[0][0].ndim != 1:
+        if self._deriv_arrays[0][0].ndim != 1:
             raise ValueError(
                 'The base function is expected to evaluate to a 1d vector.')
 
-        self.deriv_arrays = \
+        self._deriv_arrays = \
             [[ None for _ in range(self._order2 + 1)] \
                 for _ in range(self._order1 + 1)]
         for x1_ind in range(self._order1 + 1):
@@ -704,8 +704,11 @@ class ReverseModeDerivativeArray():
                 if verbose:
                     print('Evaluating the derivative {}, {}'.format(
                         x1_ind, x2_ind))
-                self.deriv_arrays[x1_ind][x2_ind] = \
+                self._deriv_arrays[x1_ind][x2_ind] = \
                     self._eval_deriv_arrays[x1_ind][x2_ind](x1, x2)
+
+    def deriv_arrays(self, order1, order2):
+        return self._deriv_arrays[order1][order2]
 
     def _check_location(self, x1, x2, tol=1e-8):
         if (np.max(np.abs(x1 - self._x1)) > tol) or \
@@ -734,7 +737,8 @@ class ReverseModeDerivativeArray():
         # This keeps the first dimension of the partial derivative array,
         # and sums over the x1 first, then the x2.  This needs to match the
         # order in which the partial derivatives are taken in `__init__`.
-        return _contract_tensor(self.deriv_arrays[order1][order2], dx1s, dx2s)
+        return _contract_tensor(
+            self._deriv_arrays[order1][order2], dx1s, dx2s)
 
 
 class ReorderedReverseModeDerivativeArray():
@@ -784,6 +788,12 @@ class ReorderedReverseModeDerivativeArray():
         dz1s, dz2s = self._swapped_args(dx1s, dx2s)
         return self._rmda.eval_directional_derivative(
             z1, z2, dz1s, dz2s, validate=validate)
+
+    def deriv_arrays(self, order1, order2):
+        if self._swapped:
+            return self._rmda.deriv_arrays[order2][order1].T
+        else:
+            return self._rmda.deriv_arrays[order1][order2].T
 
 
 def _consolidate_terms(dterms):
