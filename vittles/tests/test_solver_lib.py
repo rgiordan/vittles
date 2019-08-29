@@ -2,19 +2,9 @@
 
 import numpy as np
 from numpy.testing import assert_array_almost_equal
-#import paragami
 import scipy as sp
-#from test_utils import QuadraticModel
 import unittest
-#import time
-#import warnings
-
-# import vittles
-# from vittles import sensitivity_lib
 from vittles import solver_lib
-# from vittles.sensitivity_lib import \
-#     _append_jvp, _evaluate_term_fwd, DerivativeTerm, \
-#     ReverseModeDerivativeArray, ForwardModeDerivativeArray
 
 
 class TestSystemSolver(unittest.TestCase):
@@ -27,16 +17,30 @@ class TestSystemSolver(unittest.TestCase):
         v = np.random.random(d)
         h_inv_v = np.linalg.solve(h_dense, v)
 
-        for h in [h_dense, h_sparse]:
-            for method in ['factorization', 'cg']:
-                h_solver = solver_lib.SystemSolver(h, method)
-                assert_array_almost_equal(h_solver.solve(v), h_inv_v)
+        assert_array_almost_equal(
+            solver_lib.get_dense_cholesky_solver(h_dense)(v), h_inv_v)
+        assert_array_almost_equal(
+            solver_lib.get_cholesky_solver(h_dense)(v), h_inv_v)
+        h_chol = sp.linalg.cho_factor(h_dense)
+        assert_array_almost_equal(
+            solver_lib.get_dense_cholesky_solver(None, h_chol)(v), h_inv_v)
 
-        h_solver = solver_lib.SystemSolver(h_dense, 'cg')
-        h_solver.set_cg_options({'maxiter': 1})
+        assert_array_almost_equal(
+            solver_lib.get_cholesky_solver(h_sparse)(v), h_inv_v)
+        assert_array_almost_equal(
+            solver_lib.get_sparse_cholesky_solver(h_sparse)(v), h_inv_v)
+
+        assert_array_almost_equal(
+            solver_lib.get_cg_solver(lambda v: h_dense @ v, d)(v),
+            h_inv_v)
+        assert_array_almost_equal(
+            solver_lib.get_cg_solver(lambda v: h_sparse @ v, d)(v), h_inv_v)
+
+        # With only one iteration, the CG should fail and raise a warning.
+        h_solver = solver_lib.get_cg_solver(
+            lambda v: h_sparse @ v, d, cg_opts={'maxiter': 1})
         with self.assertWarns(UserWarning):
-            # With only one iteration, the CG should fail and raise a warning.
-            h_solver.solve(v)
+            h_solver(v)
 
 
 if __name__ == '__main__':

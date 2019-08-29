@@ -12,7 +12,8 @@ from string import ascii_lowercase
 import warnings
 
 from paragami import FlattenFunctionInput
-from .solver_lib import SystemSolver
+#from .solver_lib import SystemSolver
+from . import solver_lib
 
 
 class HyperparameterSensitivityLinearApproximation:
@@ -157,8 +158,9 @@ class HyperparameterSensitivityLinearApproximation:
         if self._hess0.shape != (len(self._opt0), len(self._opt0)):
             raise ValueError('``hessian_at_opt`` is the wrong shape.')
 
-        method = 'factorization' if factorize_hessian else 'cg'
-        self.hess_solver = SystemSolver(self._hess0, method)
+        # method = 'factorization' if factorize_hessian else 'cg'
+        # self.hess_solver = SystemSolver(self._hess0, method)
+        self.hess_solver = solver_lib.get_cholesky_solver(hess0)
 
         if validate_optimum:
             if grad_tol is None:
@@ -166,7 +168,7 @@ class HyperparameterSensitivityLinearApproximation:
 
             # Check that the gradient of the objective is zero at the optimum.
             grad0 = self._obj_fun_grad(self._opt0, self._hyper0)
-            newton_step = -1 * self.hess_solver.solve(grad0)
+            newton_step = -1 * self.hess_solver(grad0)
 
             newton_step_norm = np.linalg.norm(newton_step)
             if newton_step_norm > grad_tol:
@@ -183,7 +185,7 @@ class HyperparameterSensitivityLinearApproximation:
         if self._cross_hess.shape != (len(self._opt0), len(self._hyper0)):
             raise ValueError('``cross_hess_at_opt`` is the wrong shape.')
 
-        self._sens_mat = -1 * self.hess_solver.solve(self._cross_hess)
+        self._sens_mat = -1 * self.hess_solver(self._cross_hess)
 
 
     # Methods:
@@ -890,7 +892,8 @@ class ParametricSensitivityTaylorExpansion(object):
         # the Hessian will have an extra dimension.  This is a confusing
         # error that we could catch explicitly at the cost of an extra
         # function evaluation.  Is it worth it?
-        hess_solver = SystemSolver(hess0, 'factorization')
+        #hess_solver = SystemSolver(hess0, 'factorization')
+        hess_solver = get_cholesky_solver(hess0)
 
         return cls(
             estimating_equation=estimating_equation,
@@ -926,8 +929,8 @@ class ParametricSensitivityTaylorExpansion(object):
             The value of ``hyper_par`` at which ``input_val0`` was found.
         order : `int`
             The maximum order of the Taylor series to be calculated.
-        hess_solver : `SystemSolver`
-            A class that implements a solution to the linear system
+        hess_solver : `function`
+            A function that takes a single argument, `v`, and returns
 
             .. math::
 
@@ -986,27 +989,11 @@ class ParametricSensitivityTaylorExpansion(object):
 
         self._order = order
 
-        # You need one more gradient derivative than the order of the Taylor
-        # approximation. ------ Note that these refer to gradients of the
-        # estimating equation not the original objective, so I think this is
-        # untrue, and the old version was calculating more derivatives than
-        # were necessary.
-
-        # if self._max_input_order is None:
-        #     order1 = self._order + 1
-        # else:
-        #     order1 = min(self._order + 1, self._max_input_order)
-
         # In fact can't this be self._order - 1?
         if self._max_input_order is None:
             order1 = self._order
         else:
             order1 = min(self._order, self._max_input_order)
-
-        # if self._max_hyper_order is None:
-        #     order2 = self._order + 2
-        # else:
-        #     order2 = min(self._order + 2, self._max_hyper_order)
 
         if self._max_hyper_order is None:
             order2 = self._order
@@ -1096,7 +1083,7 @@ class ParametricSensitivityTaylorExpansion(object):
                     eta_derivs=input_derivs,
                     eval_directional_derivative= \
                         self._deriv_array.eval_directional_derivative)
-        return -1 * self.hess_solver.solve(vec)
+        return -1 * self.hess_solver(vec)
 
 
     def _get_default_max_order(self, max_order):
