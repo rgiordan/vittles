@@ -791,9 +791,9 @@ class ReorderedReverseModeDerivativeArray():
 
     def deriv_arrays(self, order1, order2):
         if self._swapped:
-            return self._rmda.deriv_arrays[order2][order1].T
+            return self._rmda.deriv_arrays(order2, order1).T
         else:
-            return self._rmda.deriv_arrays[order1][order2].T
+            return self._rmda.deriv_arrays(order1, order2)
 
 
 def _consolidate_terms(dterms):

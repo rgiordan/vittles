@@ -195,13 +195,14 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
         deriv_array = RMDA(fun=g, order1=max_order1, order2=max_order2)
         deriv_array.set_evaluation_location(x1, x2)
 
-        self.assertEqual(
-            max_order1 + 1,
-            len(deriv_array._eval_deriv_arrays))
-        for i in range(max_order1 + 1):
-            self.assertEqual(
-                max_order2 + 1,
-                len(deriv_array._eval_deriv_arrays[i]))
+        # This does not make sense with a swapped array.
+        # self.assertEqual(
+        #     max_order1 + 1,
+        #     len(deriv_array._eval_deriv_arrays))
+        # for i in range(max_order1 + 1):
+        #     self.assertEqual(
+        #         max_order2 + 1,
+        #         len(deriv_array._eval_deriv_arrays[i]))
 
         # Check the first couple deriv_arrays by hand.
         assert_array_almost_equal(
@@ -262,7 +263,6 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
     def test_classes(self):
         # Currently this test only makes sense with the original class.
         self._test_derivative_arrays(ReverseModeDerivativeArray)
-
         self._test_warning(ReverseModeDerivativeArray)
         self._test_evaluate_directional_derivative(ReverseModeDerivativeArray)
 
@@ -270,6 +270,7 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
             def RMDA(fun, order1, order2):
                 return ReorderedReverseModeDerivativeArray(
                     fun, order1, order2, swapped)
+            self._test_derivative_arrays(RMDA)
             self._test_warning(RMDA, swapped=swapped)
             self._test_evaluate_directional_derivative(RMDA)
 
