@@ -791,7 +791,11 @@ class ReorderedReverseModeDerivativeArray():
 
     def deriv_arrays(self, order1, order2):
         if self._swapped:
-            return self._rmda.deriv_arrays(order2, order1).T
+            orig_array = self._rmda.deriv_arrays(order2, order1)
+            # Derivatives with respect to the second variable come first
+            # (after the axis of the base function), and need to be at the end.
+            axes2 = np.arange(order2) + 1
+            return np.moveaxis(orig_array, axes2, -1 * axes2)
         else:
             return self._rmda.deriv_arrays(order1, order2)
 
