@@ -1002,13 +1002,15 @@ class ParametricSensitivityTaylorExpansion(object):
                 order1=order1,
                 order2=order2)
         else:
-            # TODO: Here, you could be smart about the order in which
-            # you evaluate the derivatives.  The larger array should be
-            # second.
-            self._deriv_array = ReverseModeDerivativeArray(
+            # If the input has higher dimension than the hyperparameter,
+            # we want to take reverse mode derivatives with respect to
+            # the hyperparameter first, so swap the order of the arguments.
+            swapped = len(self._input_val0) > len(self._hyper_val0)
+            self._deriv_array = ReorderedReverseModeDerivativeArray(
                 self._objective_function_eta_grad,
                 order1=order1,
-                order2=order2)
+                order2=order2,
+                swapped=swapped)
 
         def differentiate_terms(dterms):
             dterms_derivs = []
@@ -1080,15 +1082,21 @@ class ParametricSensitivityTaylorExpansion(object):
         return -1 * self.hess_solver.solve(vec)
 
 
+    def _get_max_order(self, max_order):
+        if max_order is None:
+            return self._order
+        if max_order <= 0:
+            raise ValueError('max_order must be greater than zero.')
+        if max_order > self._order:
+            raise ValueError(
+                'max_order must be no greater than the order={}'.format(
+                    self._order))
+        return max_order
+
     def evaluate_input_derivs(self, dhyper, max_order=None):
         """Return a list of the derivatives dkinput / dhyperk dhyper^k
         """
-        if max_order is None:
-            max_order = self._order
-        if max_order > self._order:
-            raise ValueError(
-                '`max_order` must be no greater than the order {}'.format(
-                    self._order))
+        max_order = self.get_max_order(max_order)
         input_derivs = []
         for k in range(1, max_order + 1):
             dinputk_dhyperk = \
@@ -1104,22 +1112,13 @@ class ParametricSensitivityTaylorExpansion(object):
                                      max_order=None):
         """Return the terms in a Taylor series approximation.
         """
-        if max_order is None:
-            max_order = self._order
-        if max_order <= 0:
-            raise ValueError('max_order must be greater than zero.')
-        if max_order > self._order:
-            raise ValueError(
-                'max_order must be no greater than the order={}'.format(
-                    self._order))
-
+        max_order = self.get_max_order(max_order)
         if add_offset:
             dinput_terms = [self._input_val0]
         else:
             dinput_terms = [np.zeros_like(self._input_val0)]
         dhyper = new_hyper_val - self._hyper_val0
-        input_derivs = \
-            self.evaluate_input_derivs(dhyper, max_order=max_order)
+        input_derivs = self.evaluate_input_derivs(dhyper, max_order=max_order)
 
         for k in range(1, max_order + 1):
             dinput_terms.append(input_derivs[k - 1] / float(factorial(k)))

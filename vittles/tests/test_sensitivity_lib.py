@@ -20,7 +20,36 @@ from vittles.sensitivity_lib import \
     _append_jvp, _evaluate_term_fwd, DerivativeTerm, \
     ReverseModeDerivativeArray, ForwardModeDerivativeArray, \
     ReorderedReverseModeDerivativeArray, \
-    ParametricSensitivityTaylorExpansion
+    ParametricSensitivityTaylorExpansion, \
+    _contract_tensor
+
+
+class TestContractTensor(unittest.TestCase):
+    def test_contract_tensor(self):
+        x1dim = 3
+        x2dim = 5
+
+        def xs(n, dim):
+            return [ np.random.random(dim) for _ in range(n) ]
+
+        def tensor(n1, n2):
+            dims = tuple(x1dim for _ in range(n1)) + \
+                   tuple(x2dim for _ in range(n2))
+            return np.random.random(dims)
+
+        deriv_array = [[ tensor(n1, n2) for n1 in range(2) ]
+                       for n2 in range(2) ]
+
+        print(deriv_array[0][1])
+        #print(_contract_tensor(deriv_array[0][1], [], xs(1, x2dim)))
+        print(_contract_tensor(deriv_array[1][1], xs(1, x1dim), xs(1, x2dim)))
+#        print(_contract_tensor(deriv_array, [], xs(1, x2dim)))
+
+        # print(deriv_array[0][0])
+        # print(_contract_tensor(deriv_array, [], []))
+        # assert_array_almost_equal(
+        #     deriv_array[0][0],
+        #     _contract_tensor(deriv_array, [], []))
 
 class TestForwardModederivativeArray(unittest.TestCase):
     def test_fwd_derivative_array(self):
@@ -667,6 +696,7 @@ class TestTaylorExpansion(unittest.TestCase):
             np.sum(terms, axis=0))
 
     def _test_max_order(self, eta_order, eps_order, test_order):
+        # TODO: test this with reverse mode and swapping.
 
         # Partial derivative of the gradient higher than eta_order and
         # eps_order are zero.
@@ -715,8 +745,56 @@ class TestTaylorExpansion(unittest.TestCase):
         self._test_max_order(1, 3, 4)
         self._test_max_order(3, 1, 4)
 
+    def test_reverse_mode_swapping(self):
+        dim1 = 2
+        dim2 = 6
 
-    def test_reverse_mode(self):
+        a = (np.random.random(dim1) - 0.5)  / dim1
+        b = (np.random.random(dim2) - 0.5) / dim2
+
+        def objective12(x1, x2):
+            return np.exp(np.dot(a, x1) + np.dot(b, x2))
+
+        def objective21(x2, x1):
+            return objective12(x1, x2)
+
+        x1 = np.random.random(dim1)
+        dx1 = np.random.random(dim1)
+        hess1 = np.eye(dim1)
+
+        x2 = np.random.random(dim2)
+        dx2 = np.random.random(dim2)
+        hess2 = np.eye(dim2)
+
+        order = 2
+        taylor_12 = \
+            ParametricSensitivityTaylorExpansion.optimization_objective(
+                objective_function=objective12,
+                forward_mode=False,
+                input_val0=x1,
+                hyper_val0=x2,
+                hess0=hess1,
+                order=order)
+
+        taylor_21 = \
+            ParametricSensitivityTaylorExpansion.optimization_objective(
+                objective_function=objective21,
+                forward_mode=False,
+                input_val0=x2,
+                hyper_val0=x1,
+                hess0=hess2,
+                order=order)
+
+        for k1, k2 in itertools.product(range(order), range(order)):
+            print(k1, k2)
+            dx1s = [dx1 for _ in range(k1)]
+            dx2s = [dx2 for _ in range(k2)]
+            d12 = taylor_12._deriv_array.eval_directional_derivative(
+                x1, x2, dx1s, dx2s)
+            # d21 = taylor_21._deriv_array.eval_directional_derivative(
+            #     x2, x1, dx2s, dx1s)
+
+    def test_weighted_linear_regression(self):
         # Test with weighted linear regression, which has only one partial
         # derivative with respect to the hyperparameter.
         n_obs = 10
