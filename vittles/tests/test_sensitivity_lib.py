@@ -33,23 +33,34 @@ class TestContractTensor(unittest.TestCase):
             return [ np.random.random(dim) for _ in range(n) ]
 
         def tensor(n1, n2):
-            dims = tuple(x1dim for _ in range(n1)) + \
+            dims = (x1dim, ) + \
+                   tuple(x1dim for _ in range(n1)) + \
                    tuple(x2dim for _ in range(n2))
             return np.random.random(dims)
 
-        deriv_array = [[ tensor(n1, n2) for n1 in range(2) ]
-                       for n2 in range(2) ]
+        deriv_array = [[ tensor(n1, n2) for n2 in range(3) ]
+                         for n1 in range(3) ]
 
-        print(deriv_array[0][1])
-        #print(_contract_tensor(deriv_array[0][1], [], xs(1, x2dim)))
-        print(_contract_tensor(deriv_array[1][1], xs(1, x1dim), xs(1, x2dim)))
-#        print(_contract_tensor(deriv_array, [], xs(1, x2dim)))
+        assert_array_almost_equal(
+            deriv_array[0][0],
+            _contract_tensor(deriv_array[0][0], [], []))
 
-        # print(deriv_array[0][0])
-        # print(_contract_tensor(deriv_array, [], []))
-        # assert_array_almost_equal(
-        #     deriv_array[0][0],
-        #     _contract_tensor(deriv_array, [], []))
+        x1s = xs(2, x1dim)
+        x2s = xs(2, x2dim)
+
+        assert_array_almost_equal(
+            np.einsum('abc,b,c->a', deriv_array[2][0], x1s[0], x1s[1]),
+            _contract_tensor(deriv_array[2][0], x1s, []))
+
+        assert_array_almost_equal(
+            np.einsum('abc,b,c->a', deriv_array[0][2], x2s[0], x2s[1]),
+            _contract_tensor(deriv_array[0][2], [], x2s))
+
+        assert_array_almost_equal(
+            np.einsum('abcde,b,c,d,e->a',
+                      deriv_array[2][2], x1s[0], x1s[1], x2s[0], x2s[1]),
+            _contract_tensor(deriv_array[2][2], x1s, x2s))
+
 
 class TestForwardModederivativeArray(unittest.TestCase):
     def test_fwd_derivative_array(self):

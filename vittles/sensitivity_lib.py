@@ -577,6 +577,9 @@ def _contract_tensor(deriv_array, dx1s, dx2s):
             'You cannot use _contract_tensor with so many vectors ' +
             'because of the crazy way rgiordan decided to do this with einsum.')
 
+    if (len(dx1s) + len(dx2s)) == 0:
+        return deriv_array
+
     ind_letters =  ascii_lowercase[0:(len(dx1s) + len(dx2s))]
     einsum_str = \
         'z' + ''.join(ind_letters) + ',' + ','.join(ind_letters) + '->z'
