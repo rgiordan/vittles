@@ -1099,7 +1099,7 @@ class ParametricSensitivityTaylorExpansion(object):
         return -1 * self.hess_solver.solve(vec)
 
 
-    def _get_max_order(self, max_order):
+    def _get_default_max_order(self, max_order):
         if max_order is None:
             return self._order
         if max_order <= 0:
@@ -1113,7 +1113,7 @@ class ParametricSensitivityTaylorExpansion(object):
     def evaluate_input_derivs(self, dhyper, max_order=None):
         """Return a list of the derivatives dkinput / dhyperk dhyper^k
         """
-        max_order = self.get_max_order(max_order)
+        max_order = self._get_default_max_order(max_order)
         input_derivs = []
         for k in range(1, max_order + 1):
             dinputk_dhyperk = \
@@ -1129,7 +1129,7 @@ class ParametricSensitivityTaylorExpansion(object):
                                      max_order=None):
         """Return the terms in a Taylor series approximation.
         """
-        max_order = self.get_max_order(max_order)
+        max_order = self._get_default_max_order(max_order)
         if add_offset:
             dinput_terms = [self._input_val0]
         else:

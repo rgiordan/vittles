@@ -196,6 +196,7 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
         deriv_array.set_evaluation_location(x1, x2)
 
         # This does not make sense with a swapped array.
+        # TODO: replace this with another test.
         # self.assertEqual(
         #     max_order1 + 1,
         #     len(deriv_array._eval_deriv_arrays))
@@ -773,7 +774,7 @@ class TestTaylorExpansion(unittest.TestCase):
         self._test_max_order(3, 1, 4)
 
     def test_reverse_mode_swapping(self):
-        dim1 = 2
+        dim1 = 3
         dim2 = 6
 
         a = (np.random.random(dim1) - 0.5)  / dim1
@@ -826,17 +827,13 @@ class TestTaylorExpansion(unittest.TestCase):
             d21 = taylor_21._deriv_array.eval_directional_derivative(
                 x2, x1, dx2s, dx1s)
 
+            # These derivatives should be comparable.
             deriv12 = taylor_12._deriv_array.deriv_arrays(k1, k2)
             deriv21 = taylor_21._deriv_array.deriv_arrays(k2, k1)
-            assert_array_almost_equal(deriv12, deriv21)
 
-            print('Ok')
-            print(deriv12.shape)
-            print(_contract_tensor(deriv12, dx1s, dx2s).shape)
-            print(_contract_tensor(deriv21, dx1s, dx2s).shape)
-            # assert_array_almost_equal(
-            #     _contract_tensor(deriv12, dx1s, dx2s),
-            #     _contract_tensor(deriv21, dx1s, dx2s))
+            assert_array_almost_equal(
+                _contract_tensor(deriv12, dx1s, dx2s),
+                _contract_tensor(deriv21, dx2s, dx1s))
 
     def test_weighted_linear_regression(self):
         # Test with weighted linear regression, which has only one partial
