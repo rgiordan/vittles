@@ -734,6 +734,68 @@ class ReverseModeDerivativeArray():
         return _contract_tensor(self.deriv_arrays[order1][order2], dx1s, dx2s)
 
 
+class ReorderedReverseModeDerivativeArray():
+    """
+    Like a ReverseModeDerivativeArray, but takes derivatives with respect
+    to the larger dimension last for efficiency.
+
+    ReverseModeDerivativeArray takes derivatives with respect to the
+    second variable last.  The second variable should have the largest
+    dimension for efficient automatic differentiation.  This class wraps
+    the methods of ReverseModeDerivativeArray, swapping the order of the
+    arguments if necessary to evaluate derivatives in the more efficient
+    direction.
+    """
+    def __init__(self, fun, order1, order2, dim1, dim2):
+        # The underlying ReverseModeDerivativeArray will be with respect to
+        # z1, z2 for the purposes of naming variables.
+        self._dim1 = dim1
+        self._dim2 = dim2
+        self._swapped = dim1 < dim2
+
+        if self._swapped:
+            # Swap the order
+            self._orderz1 = order2
+            self._orderz2 = order1
+        else:
+            self._orderz1 = order1
+            self._orderz2 = order2
+
+        def _fun(z1, z2):
+            return fun(*(self._swapped_args(z1, z2)))
+        self._fun = _fun
+
+        self._rmda = ReverseModeDerivativeArray(
+            self._fun, self._orderz1, self._orderz2)
+
+    def _swapped_args(self, x1, x2):
+        if self._swapped:
+            return x2, x1
+        else:
+            return x1, x2
+
+    def set_evaluation_location(self, x1, x2, force=False, verbose=False):
+        if len(x1) != self._dim1:
+            raise ValueError(
+                "The length of x1 must match the declared length, {}".format(
+                    self._dim1))
+
+        if len(x2) != self._dim2:
+            raise ValueError(
+                "The length of x2 must match the declared length, {}".format(
+                    self._dim2))
+
+        z1, z2 = self._swapped_args(x1, x2)
+        return self._rmda.set_evaluation_location(
+            x1=z1, x2=z2, force=force, verbose=verbose)
+
+    def eval_directional_derivative(self, x1, x2, dx1s, dx2s, validate=True):
+        z1, z2 = self._swapped_args(x1, x2)
+        dz1s, dz2s = self._swapped_args(dx1s, dx2s)
+        return self._rmda.eval_directional_derivative(
+            z1, z2, dz1s, dz2s, validate=validate)
+
+
 def _consolidate_terms(dterms):
     """
     Combine like derivative terms.
@@ -921,11 +983,17 @@ class ParametricSensitivityTaylorExpansion(object):
         self._order = order
 
         # You need one more gradient derivative than the order of the Taylor
-        # approximation.
+        # approximation. ------ Note that these refer to gradients of the
+        # estimating equation not the original objective, so I think this is
+        # untrue, and the old version was calculating more derivatives than
+        # were necessary.
+
         # if self._max_input_order is None:
         #     order1 = self._order + 1
         # else:
         #     order1 = min(self._order + 1, self._max_input_order)
+
+        # In fact can't this be self._order - 1?
         if self._max_input_order is None:
             order1 = self._order
         else:
@@ -947,6 +1015,9 @@ class ParametricSensitivityTaylorExpansion(object):
                 order1=order1,
                 order2=order2)
         else:
+            # TODO: Here, you could be smart about the order in which
+            # you evaluate the derivatives.  The larger array should be
+            # second.
             self._deriv_array = ReverseModeDerivativeArray(
                 self._objective_function_eta_grad,
                 order1=order1,
