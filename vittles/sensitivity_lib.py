@@ -746,15 +746,12 @@ class ReorderedReverseModeDerivativeArray():
     arguments if necessary to evaluate derivatives in the more efficient
     direction.
     """
-    def __init__(self, fun, order1, order2, dim1, dim2):
+    def __init__(self, fun, order1, order2, swapped=None):
+        self._swapped = swapped
+
         # The underlying ReverseModeDerivativeArray will be with respect to
         # z1, z2 for the purposes of naming variables.
-        self._dim1 = dim1
-        self._dim2 = dim2
-        self._swapped = dim1 < dim2
-
         if self._swapped:
-            # Swap the order
             self._orderz1 = order2
             self._orderz2 = order1
         else:
@@ -766,7 +763,7 @@ class ReorderedReverseModeDerivativeArray():
         self._fun = _fun
 
         self._rmda = ReverseModeDerivativeArray(
-            self._fun, self._orderz1, self._orderz2)
+            fun=self._fun, order1=self._orderz1, order2=self._orderz2)
 
     def _swapped_args(self, x1, x2):
         if self._swapped:
@@ -775,16 +772,6 @@ class ReorderedReverseModeDerivativeArray():
             return x1, x2
 
     def set_evaluation_location(self, x1, x2, force=False, verbose=False):
-        if len(x1) != self._dim1:
-            raise ValueError(
-                "The length of x1 must match the declared length, {}".format(
-                    self._dim1))
-
-        if len(x2) != self._dim2:
-            raise ValueError(
-                "The length of x2 must match the declared length, {}".format(
-                    self._dim2))
-
         z1, z2 = self._swapped_args(x1, x2)
         return self._rmda.set_evaluation_location(
             x1=z1, x2=z2, force=force, verbose=verbose)

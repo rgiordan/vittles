@@ -19,6 +19,7 @@ from vittles import solver_lib
 from vittles.sensitivity_lib import \
     _append_jvp, _evaluate_term_fwd, DerivativeTerm, \
     ReverseModeDerivativeArray, ForwardModeDerivativeArray, \
+    ReorderedReverseModeDerivativeArray, \
     ParametricSensitivityTaylorExpansion
 
 class TestForwardModederivativeArray(unittest.TestCase):
@@ -107,13 +108,20 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
 
         return g, x1, x2
 
-    def test_warning(self):
+    def _test_warning(self, RMDA, swapped=False):
         def g(x1, x2):
             return 0.
 
-        deriv_array = ReverseModeDerivativeArray(fun=g, order1=2, order2=2)
-        x1 = np.zeros(1)
-        x2 = np.zeros(1000)
+        deriv_array = RMDA(fun=g, order1=2, order2=2)
+
+        # Swap so that it doesn't take a long time when running with force=True.
+        if swapped:
+            x1 = np.zeros(1000)
+            x2 = np.zeros(1)
+        else:
+            x1 = np.zeros(1)
+            x2 = np.zeros(1000)
+
         with self.assertRaises(ValueError):
             # 100^2 * 100^2 > 1e6, and should throw an error when you try to
             # set the initial point.
@@ -122,7 +130,7 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
         # Check that it works with force.
         deriv_array.set_evaluation_location(x1, x2, force=True, verbose=True)
 
-        deriv_array = ReverseModeDerivativeArray(fun=g, order1=3, order2=3)
+        deriv_array = RMDA(fun=g, order1=3, order2=3)
         x1 = np.zeros(2)
         x2 = np.zeros(2)
         with self.assertRaises(ValueError):
@@ -132,13 +140,12 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
         # Check that it works with force.
         deriv_array.set_evaluation_location(x1, x2, force=True)
 
-    def test_derivative_arrays(self):
+    def _test_derivative_arrays(self, RMDA):
         g, x1, x2 = self.get_test_fun(2, 4)
 
         max_order1 = 2
         max_order2 = 2
-        deriv_array = ReverseModeDerivativeArray(
-            fun=g, order1=max_order1, order2=max_order2)
+        deriv_array = RMDA(fun=g, order1=max_order1, order2=max_order2)
         deriv_array.set_evaluation_location(x1, x2)
 
         self.assertEqual(
@@ -162,13 +169,12 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
             autograd.jacobian(g, argnum=1)(x1, x2),
             deriv_array.deriv_arrays[0][1])
 
-    def test_evaluate_directional_derivative(self):
+    def _test_evaluate_directional_derivative(self, RMDA):
         g, x1, x2 = self.get_test_fun(2, 4)
 
         max_order1 = 2
         max_order2 = 2
-        deriv_array = ReverseModeDerivativeArray(
-            fun=g, order1=max_order1, order2=max_order2)
+        deriv_array = RMDA(fun=g, order1=max_order1, order2=max_order2)
         deriv_array.set_evaluation_location(x1, x2)
 
         dx1s = [ np.random.random(len(x1)) \
@@ -196,6 +202,21 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             deriv_array.eval_directional_derivative(x1, x2 + 0.1, dx1s, dx2s)
+
+
+    def test_classes(self):
+        # Currently this test only makes sense with the original class.
+        self._test_derivative_arrays(ReverseModeDerivativeArray)
+
+        self._test_warning(ReverseModeDerivativeArray)
+        self._test_evaluate_directional_derivative(ReverseModeDerivativeArray)
+
+        for swapped in [False, True]:
+            def RMDA(fun, order1, order2):
+                return ReorderedReverseModeDerivativeArray(
+                    fun, order1, order2, swapped)
+            self._test_warning(RMDA, swapped=swapped)
+            self._test_evaluate_directional_derivative(RMDA)
 
 
 class TestAppendJVP(unittest.TestCase):
