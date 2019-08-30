@@ -12,7 +12,6 @@ from string import ascii_lowercase
 import warnings
 
 from paragami import FlattenFunctionInput
-#from .solver_lib import SystemSolver
 from . import solver_lib
 
 
@@ -68,7 +67,6 @@ class HyperparameterSensitivityLinearApproximation:
         validate_optimum=False,
         hessian_at_opt=None,
         cross_hess_at_opt=None,
-        factorize_hessian=True,
         hyper_par_objective_fun=None,
         grad_tol=1e-8):
         """
@@ -96,10 +94,6 @@ class HyperparameterSensitivityLinearApproximation:
             Optional.  The second derivative of the objective with respect to
             ``input_val`` then ``hyper_val``.
             If not specified it is calculated at initialization.
-        factorize_hessian : `bool`, optional
-            If ``True``, solve the required linear system using a Cholesky
-            factorization.  If ``False``, use the conjugate gradient algorithm
-            to avoid forming or inverting the Hessian.
         hyper_par_objective_fun : `callable`, optional
             The part of ``objective_fun`` depending on both ``opt_par`` and
             ``hyper_par``.  The arguments must be the same as
@@ -136,14 +130,12 @@ class HyperparameterSensitivityLinearApproximation:
         self.set_base_values(
             opt_par_value, hyper_par_value,
             hessian_at_opt, cross_hess_at_opt,
-            factorize_hessian,
             validate_optimum=validate_optimum,
             grad_tol=self._grad_tol)
 
     def set_base_values(self,
                         opt_par_value, hyper_par_value,
                         hessian_at_opt, cross_hess_at_opt,
-                        factorize_hessian,
                         validate_optimum=True, grad_tol=None):
 
         # Set the values of the optimal parameters.
@@ -158,9 +150,7 @@ class HyperparameterSensitivityLinearApproximation:
         if self._hess0.shape != (len(self._opt0), len(self._opt0)):
             raise ValueError('``hessian_at_opt`` is the wrong shape.')
 
-        # method = 'factorization' if factorize_hessian else 'cg'
-        # self.hess_solver = SystemSolver(self._hess0, method)
-        self.hess_solver = solver_lib.get_cholesky_solver(hess0)
+        self.hess_solver = solver_lib.get_cholesky_solver(self._hess0)
 
         if validate_optimum:
             if grad_tol is None:
@@ -892,8 +882,7 @@ class ParametricSensitivityTaylorExpansion(object):
         # the Hessian will have an extra dimension.  This is a confusing
         # error that we could catch explicitly at the cost of an extra
         # function evaluation.  Is it worth it?
-        #hess_solver = SystemSolver(hess0, 'factorization')
-        hess_solver = get_cholesky_solver(hess0)
+        hess_solver = solver_lib.get_cholesky_solver(hess0)
 
         return cls(
             estimating_equation=estimating_equation,

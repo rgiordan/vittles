@@ -640,7 +640,8 @@ class TestTaylorExpansion(unittest.TestCase):
         test_order = 3
         if custom_solver:
             estimating_equation = autograd.grad(objective, argnum=0)
-            solver = solver_lib.SystemSolver(hess0, 'cg')
+            solver = solver_lib.get_cg_solver(
+                lambda v: hess0 @ v, dim=3)
             taylor_expansion = \
                 ParametricSensitivityTaylorExpansion(
                     estimating_equation=estimating_equation,
@@ -788,13 +789,11 @@ class TestTaylorExpansion(unittest.TestCase):
 
         x1 = np.random.random(dim1)
         dx1 = np.random.random(dim1)
-        solver1 = vittles.solver_lib.SystemSolver(
-            np.eye(dim1), 'factorization')
+        solver1 = solver_lib.get_cholesky_solver(np.eye(dim1))
 
         x2 = np.random.random(dim2)
         dx2 = np.random.random(dim2)
-        solver2 = vittles.solver_lib.SystemSolver(
-            np.eye(dim2), 'factorization')
+        solver2 = solver_lib.get_cholesky_solver(np.eye(dim2))
 
         order = 2
         taylor_12 = \
