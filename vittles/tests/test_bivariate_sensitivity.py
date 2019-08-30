@@ -75,7 +75,8 @@ class CrossSensitivityTest(unittest.TestCase):
             hess_base = obj_hess(theta)
             def w_obj(theta, w):
                 return -1 * log_lik(theta, w, x, y, y_var)
-            w_sens = vittles.ParametricSensitivityTaylorExpansion.optimization_objective(
+            w_sens = (vittles.ParametricSensitivityTaylorExpansion.
+                optimization_objective)(
                 objective_function=w_obj,
                 input_val0=theta,
                 hyper_val0=w_base,
@@ -116,12 +117,16 @@ class CrossSensitivityTest(unittest.TestCase):
         grad_base = obj_grad(theta_base)
         newton_step = -1 * np.linalg.solve(hess_base, grad_base)
         print('ns size:\t', vecsize(newton_step))
-        print('g without step:\t', vecsize(g(theta_base, np.zeros(dim), w_base)))
-        print('g after step:\t', vecsize(g(theta_base + newton_step, np.zeros(dim), w_base)))
+        print('g without step:\t',
+            vecsize(g(theta_base, np.zeros(dim), w_base)))
+        print('g after step:\t',
+            vecsize(g(theta_base + newton_step, np.zeros(dim), w_base)))
 
         def get_dtheta_from_lam(theta, lam, new_w):
-            hess_base = autograd.hessian(lambda theta: pert_obj(theta, lam, w_base))(theta)
-            w_sens = vittles.ParametricSensitivityTaylorExpansion.optimization_objective(
+            hess_base = autograd.hessian(
+                lambda theta: pert_obj(theta, lam, w_base))(theta)
+            w_sens = (vittles.ParametricSensitivityTaylorExpansion.
+                optimization_objective(
                 objective_function=lambda theta, w: pert_obj(theta, lam, w),
                 input_val0=theta,
                 hyper_val0=w_base,
@@ -130,7 +135,7 @@ class CrossSensitivityTest(unittest.TestCase):
                 forward_mode=False,
                 max_input_order=None,
                 max_hyper_order=1,
-                force=True)
+                force=True))
             return w_sens.evaluate_taylor_series(new_w) - theta
 
         def optimize_lam(theta_init, lam, w):
@@ -162,8 +167,8 @@ class CrossSensitivityTest(unittest.TestCase):
         dlambda = -1 * lam_base
 
         dtheta_correction = cross_sens.evaluate(dlambda, dw)
-        print('Correction:\t',    vecsize(dtheta_correction))
-        print('Rel. crctn.:\t',   vecsize(dtheta_correction)  / vecsize(dtheta))
+        print('Correction:\t',  vecsize(dtheta_correction))
+        print('Rel. crctn.:\t', vecsize(dtheta_correction)  / vecsize(dtheta))
 
 
         # The target of the improved approximation is the sensitivity at the
@@ -216,7 +221,8 @@ class CrossSensitivityTest(unittest.TestCase):
         print('Rel. crctn.:\t', vecsize(dtheta_correction)  / vecsize(dtheta))
 
 
-        # The target of the improved approximation is the sensitivity at the new optimum.
+        # The target of the improved approximation is the sensitivity at the
+        # new optimum.
 
         print('Uncorrected:\t', np.sum(np.abs(dtheta_0 - dtheta)))
         print('Corrected:\t',
