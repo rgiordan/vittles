@@ -53,18 +53,28 @@ class CrossSensitivity():
         self._term_i2 = term_i2
         self._term_12 = term_12
 
-    def evaluate(self, dh1, dh2, debug=False):
+    def get_di1(self, dh1):
+        g_1 = self._g_1(
+            self._input_base, self._hyper1_base, self._hyper2_base,
+            dh1)
+        di1 = -1 * self._solver(g_1)
+        return di1
+
+    def get_di2(self, dh2):
+        g_2 = self._g_2(
+            self._input_base, self._hyper1_base, self._hyper2_base,
+            dh2)
+        di2 = -1 * self._solver(g_2)
+        return di2
+
+    def evaluate(self, dh1, dh2, di1=None, di2=None, debug=False):
         if self._term_ii or self._term_i2 or self._term_i12:
-            g_1 = self._g_1(
-                self._input_base, self._hyper1_base, self._hyper2_base,
-                dh1)
-            di1 = -1 * self._solver(g_1)
+            if di1 is None:
+                di1 = self.get_di1(dh1)
 
         if self._term_ii or self._term_i1 or self._term_i12:
-            g_2 = self._g_2(
-                self._input_base, self._hyper1_base, self._hyper2_base,
-                dh2)
-            di2 = -1 * self._solver(g_2)
+            if di2 is None:
+                di2 = self.get_di2(dh2)
 
         g_ii = 0
         g_i1 = 0
@@ -99,3 +109,51 @@ class CrossSensitivity():
             print('di2: ', di2)
 
         return -1 * self._solver(g_ii + g_i1 + g_i2 + g_12)
+
+
+class OptimumChecker():
+    def __init__(self,
+                 estimating_equation,
+                 solver,
+                 input_base,
+                 hyper_base):
+
+        self._input_base = deepcopy(input_base)
+        self._hyper_base = deepcopy(hyper_base)
+        self._solver = solver
+
+        def estimating_equation_lagrange(ipar, hpar, lam):
+            return \
+                estimating_equation(ipar, hpar) + \
+                np.dot(lam, ipar - self._input_base)
+        self.estimating_equation_lagrange = estimating_equation_lagrange
+
+        self._obj = lambda ipar: estimating_equation(ipar, self._hyper_base)
+        self._obj_grad = autograd.grad(self._obj)
+
+        self._lam_base = -1 * self._obj_grad(self._input_base)
+        self._dlam = -1 * self._lam_base
+
+        self._cross_sens = CrossSensitivity(
+            estimating_equation = self.estimating_equation_lagrange,
+            solver =        self._solver,
+            input_base =    self._input_base,
+            hyper1_base =   self._hyper_base,
+            hyper2_base =   self._lam_base,
+            term_i2=False,
+            term_12=False)
+
+    def get_newton_step(self):
+        return self._cross_sens.get_di2(self._dlam)
+
+    def get_dinput_dhyper(self, dhyper):
+        return self._cross_sens.get_di2(dhyper)
+
+    def evaluate(self, hyper_new, dinput_dhyper=None, newton_step=None):
+        dhyper = hyper_new - self._hyper_base
+        if dinput_dhyper is None:
+            dinput_dhyper = self.get_dinput_dhyper(dhyper)
+        if newton_step is None:
+            newton_step = self.get_newton_step()
+        return self._cross_sens.evaluate(
+            dhyper, dlam, di1=dinput_dhyper, di2=newton_step) + hyper_new
