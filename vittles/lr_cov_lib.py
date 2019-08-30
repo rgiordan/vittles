@@ -5,8 +5,7 @@
 import autograd
 from copy import deepcopy
 import numpy as np
-from .solver_lib import SystemSolver
-
+from . import solver_lib
 
 class LinearResponseCovariances:
     """
@@ -104,13 +103,12 @@ class LinearResponseCovariances:
         else:
             self._hess0 = hessian_at_opt
 
-        method = 'factorization' if factorize_hessian else 'cg'
-        self.hess_solver = SystemSolver(self._hess0, method)
+        self.hess_solver = solver_lib.get_cholesky_solver(self._hess0)
 
         if validate:
             # Check that the gradient of the objective is zero at the optimum.
             grad0 = self._obj_fun_grad(self._opt0)
-            newton_step = -1 * self.hess_solver.solve(grad0)
+            newton_step = -1 * self.hess_solver(grad0)
 
             newton_step_norm = np.linalg.norm(newton_step)
             if newton_step_norm > grad_tol:
@@ -120,7 +118,6 @@ class LinearResponseCovariances:
                         newton_step_norm, grad_tol)
                 raise ValueError(err_msg)
 
-    # Methods:
     def get_hessian_at_opt(self):
         return self._hess0
 
@@ -172,9 +169,7 @@ class LinearResponseCovariances:
                          len(self._opt0), moment_jacobian2.shape)
             raise ValueError(err_msg)
 
-        # return moment_jacobian1 @ cho_solve(
-        #     self._hess0_chol, moment_jacobian2.T)
-        return moment_jacobian1 @ self.hess_solver.solve(moment_jacobian2.T)
+        return moment_jacobian1 @ self.hess_solver(moment_jacobian2.T)
 
     def get_moment_jacobian(self, calculate_moments):
         """

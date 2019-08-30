@@ -19,7 +19,48 @@ from vittles import solver_lib
 from vittles.sensitivity_lib import \
     _append_jvp, _evaluate_term_fwd, DerivativeTerm, \
     ReverseModeDerivativeArray, ForwardModeDerivativeArray, \
-    ParametricSensitivityTaylorExpansion
+    ReorderedReverseModeDerivativeArray, \
+    ParametricSensitivityTaylorExpansion, \
+    _contract_tensor
+
+
+class TestContractTensor(unittest.TestCase):
+    def test_contract_tensor(self):
+        x1dim = 3
+        x2dim = 5
+
+        def xs(n, dim):
+            return [ np.random.random(dim) for _ in range(n) ]
+
+        def tensor(n1, n2):
+            dims = (x1dim, ) + \
+                   tuple(x1dim for _ in range(n1)) + \
+                   tuple(x2dim for _ in range(n2))
+            return np.random.random(dims)
+
+        deriv_array = [[ tensor(n1, n2) for n2 in range(3) ]
+                         for n1 in range(3) ]
+
+        assert_array_almost_equal(
+            deriv_array[0][0],
+            _contract_tensor(deriv_array[0][0], [], []))
+
+        x1s = xs(2, x1dim)
+        x2s = xs(2, x2dim)
+
+        assert_array_almost_equal(
+            np.einsum('abc,b,c->a', deriv_array[2][0], x1s[0], x1s[1]),
+            _contract_tensor(deriv_array[2][0], x1s, []))
+
+        assert_array_almost_equal(
+            np.einsum('abc,b,c->a', deriv_array[0][2], x2s[0], x2s[1]),
+            _contract_tensor(deriv_array[0][2], [], x2s))
+
+        assert_array_almost_equal(
+            np.einsum('abcde,b,c,d,e->a',
+                      deriv_array[2][2], x1s[0], x1s[1], x2s[0], x2s[1]),
+            _contract_tensor(deriv_array[2][2], x1s, x2s))
+
 
 class TestForwardModederivativeArray(unittest.TestCase):
     def test_fwd_derivative_array(self):
@@ -94,26 +135,37 @@ class TestForwardModederivativeArray(unittest.TestCase):
 
 
 class TestReverseModeDerivativeArray(unittest.TestCase):
-    def get_test_fun(self, dim1, dim2):
+    def get_test_fun(self, dim1, dim2, eqdim):
         a1 = np.random.random(dim1)
         a2 = np.random.random(dim2)
-        def f(x1, x2):
-            return np.sin(np.dot(a1, x1) + np.dot(a2, x2))
 
-        g = autograd.grad(f, argnum=0)
+        # Typically, we will be using the derivative array with a gradient.
+        # But, to make sure we are using the dimensions correctly, we will
+        # test it with a vector function whose dimension does not match either
+        # regressor.
+        def g(x1, x2):
+            val = np.sin(np.dot(a1, x1) + np.dot(a2, x2))
+            return (0.5 + np.arange(eqdim)) * val
 
         x1 = np.random.random(dim1)
         x2 = np.random.random(dim2)
 
         return g, x1, x2
 
-    def test_warning(self):
+    def _test_warning(self, RMDA, swapped=False):
         def g(x1, x2):
             return 0.
 
-        deriv_array = ReverseModeDerivativeArray(fun=g, order1=2, order2=2)
-        x1 = np.zeros(1)
-        x2 = np.zeros(1000)
+        deriv_array = RMDA(fun=g, order1=2, order2=2)
+
+        # Swap so that it doesn't take a long time when running with force=True.
+        if swapped:
+            x1 = np.zeros(1000)
+            x2 = np.zeros(1)
+        else:
+            x1 = np.zeros(1)
+            x2 = np.zeros(1000)
+
         with self.assertRaises(ValueError):
             # 100^2 * 100^2 > 1e6, and should throw an error when you try to
             # set the initial point.
@@ -122,7 +174,7 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
         # Check that it works with force.
         deriv_array.set_evaluation_location(x1, x2, force=True, verbose=True)
 
-        deriv_array = ReverseModeDerivativeArray(fun=g, order1=3, order2=3)
+        deriv_array = RMDA(fun=g, order1=3, order2=3)
         x1 = np.zeros(2)
         x2 = np.zeros(2)
         with self.assertRaises(ValueError):
@@ -132,43 +184,54 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
         # Check that it works with force.
         deriv_array.set_evaluation_location(x1, x2, force=True)
 
-    def test_derivative_arrays(self):
-        g, x1, x2 = self.get_test_fun(2, 4)
+    def _test_derivative_arrays(self, RMDA):
+        x1dim = 2
+        x2dim = 4
+        gdim = 3
+        g, x1, x2 = self.get_test_fun(x1dim, x2dim, gdim)
 
         max_order1 = 2
         max_order2 = 2
-        deriv_array = ReverseModeDerivativeArray(
-            fun=g, order1=max_order1, order2=max_order2)
+        deriv_array = RMDA(fun=g, order1=max_order1, order2=max_order2)
         deriv_array.set_evaluation_location(x1, x2)
 
-        self.assertEqual(
-            max_order1 + 1,
-            len(deriv_array._eval_deriv_arrays))
-        for i in range(max_order1 + 1):
-            self.assertEqual(
-                max_order2 + 1,
-                len(deriv_array._eval_deriv_arrays[i]))
+        # This does not make sense with a swapped array.
+        # TODO: replace this with another test.
+        # self.assertEqual(
+        #     max_order1 + 1,
+        #     len(deriv_array._eval_deriv_arrays))
+        # for i in range(max_order1 + 1):
+        #     self.assertEqual(
+        #         max_order2 + 1,
+        #         len(deriv_array._eval_deriv_arrays[i]))
 
         # Check the first couple deriv_arrays by hand.
         assert_array_almost_equal(
             g(x1, x2),
-            deriv_array.deriv_arrays[0][0])
+            deriv_array.deriv_arrays(0, 0))
 
         assert_array_almost_equal(
             autograd.jacobian(g, argnum=0)(x1, x2),
-            deriv_array.deriv_arrays[1][0])
+            deriv_array.deriv_arrays(1, 0))
 
         assert_array_almost_equal(
             autograd.jacobian(g, argnum=1)(x1, x2),
-            deriv_array.deriv_arrays[0][1])
+            deriv_array.deriv_arrays(0, 1))
 
-    def test_evaluate_directional_derivative(self):
-        g, x1, x2 = self.get_test_fun(2, 4)
+        for k1, k2 in itertools.product(
+                range(max_order1 + 1), range(max_order2 + 1)):
+            expected_dim = (gdim, ) + \
+                           tuple(x1dim for _ in range(k1)) + \
+                           tuple(x2dim for _ in range(k2))
+            self.assertEqual(
+                expected_dim, deriv_array.deriv_arrays(k1, k2).shape)
+
+    def _test_evaluate_directional_derivative(self, RMDA):
+        g, x1, x2 = self.get_test_fun(2, 4, 3)
 
         max_order1 = 2
         max_order2 = 2
-        deriv_array = ReverseModeDerivativeArray(
-            fun=g, order1=max_order1, order2=max_order2)
+        deriv_array = RMDA(fun=g, order1=max_order1, order2=max_order2)
         deriv_array.set_evaluation_location(x1, x2)
 
         dx1s = [ np.random.random(len(x1)) \
@@ -196,6 +259,21 @@ class TestReverseModeDerivativeArray(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             deriv_array.eval_directional_derivative(x1, x2 + 0.1, dx1s, dx2s)
+
+
+    def test_classes(self):
+        # Currently this test only makes sense with the original class.
+        self._test_derivative_arrays(ReverseModeDerivativeArray)
+        self._test_warning(ReverseModeDerivativeArray)
+        self._test_evaluate_directional_derivative(ReverseModeDerivativeArray)
+
+        for swapped in [False, True]:
+            def RMDA(fun, order1, order2):
+                return ReorderedReverseModeDerivativeArray(
+                    fun, order1, order2, swapped)
+            self._test_derivative_arrays(RMDA)
+            self._test_warning(RMDA, swapped=swapped)
+            self._test_evaluate_directional_derivative(RMDA)
 
 
 class TestAppendJVP(unittest.TestCase):
@@ -562,7 +640,8 @@ class TestTaylorExpansion(unittest.TestCase):
         test_order = 3
         if custom_solver:
             estimating_equation = autograd.grad(objective, argnum=0)
-            solver = solver_lib.SystemSolver(hess0, 'cg')
+            solver = solver_lib.get_cg_solver(
+                lambda v: hess0 @ v, dim=3)
             taylor_expansion = \
                 ParametricSensitivityTaylorExpansion(
                     estimating_equation=estimating_equation,
@@ -646,6 +725,7 @@ class TestTaylorExpansion(unittest.TestCase):
             np.sum(terms, axis=0))
 
     def _test_max_order(self, eta_order, eps_order, test_order):
+        # TODO: test this with reverse mode and swapping.
 
         # Partial derivative of the gradient higher than eta_order and
         # eps_order are zero.
@@ -694,8 +774,67 @@ class TestTaylorExpansion(unittest.TestCase):
         self._test_max_order(1, 3, 4)
         self._test_max_order(3, 1, 4)
 
+    def test_reverse_mode_swapping(self):
+        dim1 = 3
+        dim2 = 6
 
-    def test_reverse_mode(self):
+        a = (np.random.random(dim1) - 0.5)  / dim1
+        b = (np.random.random(dim2) - 0.5) / dim2
+
+        def objective12(x1, x2):
+            return np.array([np.exp(np.dot(a, x1) + np.dot(b, x2)), 0])
+
+        def objective21(x2, x1):
+            return objective12(x1, x2)
+
+        x1 = np.random.random(dim1)
+        dx1 = np.random.random(dim1)
+        solver1 = solver_lib.get_cholesky_solver(np.eye(dim1))
+
+        x2 = np.random.random(dim2)
+        dx2 = np.random.random(dim2)
+        solver2 = solver_lib.get_cholesky_solver(np.eye(dim2))
+
+        order = 2
+        taylor_12 = \
+            ParametricSensitivityTaylorExpansion(
+                estimating_equation=objective12,
+                forward_mode=False,
+                input_val0=x1,
+                hyper_val0=x2,
+                hess_solver=solver1,
+                order=order)
+
+        taylor_21 = \
+            ParametricSensitivityTaylorExpansion(
+                estimating_equation=objective21,
+                forward_mode=False,
+                input_val0=x2,
+                hyper_val0=x1,
+                hess_solver=solver2,
+                order=order)
+
+        for k1, k2 in itertools.product(range(order + 1), range(order + 1)):
+            print(k1, k2)
+            dx1s = [dx1 for _ in range(k1)]
+            dx2s = [dx2 for _ in range(k2)]
+
+            # Just check that these evaluate.  They are not comparable
+            # with one another.
+            d12 = taylor_12._deriv_array.eval_directional_derivative(
+                x1, x2, dx1s, dx2s)
+            d21 = taylor_21._deriv_array.eval_directional_derivative(
+                x2, x1, dx2s, dx1s)
+
+            # These derivatives should be comparable.
+            deriv12 = taylor_12._deriv_array.deriv_arrays(k1, k2)
+            deriv21 = taylor_21._deriv_array.deriv_arrays(k2, k1)
+
+            assert_array_almost_equal(
+                _contract_tensor(deriv12, dx1s, dx2s),
+                _contract_tensor(deriv21, dx2s, dx1s))
+
+    def test_weighted_linear_regression(self):
         # Test with weighted linear regression, which has only one partial
         # derivative with respect to the hyperparameter.
         n_obs = 10

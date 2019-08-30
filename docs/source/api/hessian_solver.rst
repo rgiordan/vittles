@@ -2,8 +2,8 @@
 Helper Functions
 ==========================================
 
-Abstract solver class
+System solvers
 -------------------------------------------------
 
-.. autoclass:: vittles.solver_lib.SystemSolver
+.. automodule:: vittles.solver_lib
   :members:

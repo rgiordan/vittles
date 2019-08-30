@@ -12,7 +12,7 @@ from string import ascii_lowercase
 import warnings
 
 from paragami import FlattenFunctionInput
-from .solver_lib import SystemSolver
+from . import solver_lib
 
 
 class HyperparameterSensitivityLinearApproximation:
@@ -67,7 +67,6 @@ class HyperparameterSensitivityLinearApproximation:
         validate_optimum=False,
         hessian_at_opt=None,
         cross_hess_at_opt=None,
-        factorize_hessian=True,
         hyper_par_objective_fun=None,
         grad_tol=1e-8):
         """
@@ -95,10 +94,6 @@ class HyperparameterSensitivityLinearApproximation:
             Optional.  The second derivative of the objective with respect to
             ``input_val`` then ``hyper_val``.
             If not specified it is calculated at initialization.
-        factorize_hessian : `bool`, optional
-            If ``True``, solve the required linear system using a Cholesky
-            factorization.  If ``False``, use the conjugate gradient algorithm
-            to avoid forming or inverting the Hessian.
         hyper_par_objective_fun : `callable`, optional
             The part of ``objective_fun`` depending on both ``opt_par`` and
             ``hyper_par``.  The arguments must be the same as
@@ -135,14 +130,12 @@ class HyperparameterSensitivityLinearApproximation:
         self.set_base_values(
             opt_par_value, hyper_par_value,
             hessian_at_opt, cross_hess_at_opt,
-            factorize_hessian,
             validate_optimum=validate_optimum,
             grad_tol=self._grad_tol)
 
     def set_base_values(self,
                         opt_par_value, hyper_par_value,
                         hessian_at_opt, cross_hess_at_opt,
-                        factorize_hessian,
                         validate_optimum=True, grad_tol=None):
 
         # Set the values of the optimal parameters.
@@ -157,8 +150,7 @@ class HyperparameterSensitivityLinearApproximation:
         if self._hess0.shape != (len(self._opt0), len(self._opt0)):
             raise ValueError('``hessian_at_opt`` is the wrong shape.')
 
-        method = 'factorization' if factorize_hessian else 'cg'
-        self.hess_solver = SystemSolver(self._hess0, method)
+        self.hess_solver = solver_lib.get_cholesky_solver(self._hess0)
 
         if validate_optimum:
             if grad_tol is None:
@@ -166,7 +158,7 @@ class HyperparameterSensitivityLinearApproximation:
 
             # Check that the gradient of the objective is zero at the optimum.
             grad0 = self._obj_fun_grad(self._opt0, self._hyper0)
-            newton_step = -1 * self.hess_solver.solve(grad0)
+            newton_step = -1 * self.hess_solver(grad0)
 
             newton_step_norm = np.linalg.norm(newton_step)
             if newton_step_norm > grad_tol:
@@ -183,7 +175,7 @@ class HyperparameterSensitivityLinearApproximation:
         if self._cross_hess.shape != (len(self._opt0), len(self._hyper0)):
             raise ValueError('``cross_hess_at_opt`` is the wrong shape.')
 
-        self._sens_mat = -1 * self.hess_solver.solve(self._cross_hess)
+        self._sens_mat = -1 * self.hess_solver(self._cross_hess)
 
 
     # Methods:
@@ -577,6 +569,9 @@ def _contract_tensor(deriv_array, dx1s, dx2s):
             'You cannot use _contract_tensor with so many vectors ' +
             'because of the crazy way rgiordan decided to do this with einsum.')
 
+    if (len(dx1s) + len(dx2s)) == 0:
+        return deriv_array
+
     ind_letters =  ascii_lowercase[0:(len(dx1s) + len(dx2s))]
     einsum_str = \
         'z' + ''.join(ind_letters) + ',' + ','.join(ind_letters) + '->z'
@@ -659,9 +654,9 @@ class ReverseModeDerivativeArray():
         if x1.ndim != 1 or x2.ndim != 1:
             raise ValueError('x1 and x2 must be 1d arrays.')
 
-        self.deriv_arrays = \
+        self._deriv_arrays = \
             [[ np.atleast_1d(self._eval_deriv_arrays[0][0](x1, x2)) ]]
-        dim0 = len(self.deriv_arrays[0][0])
+        dim0 = len(self._deriv_arrays[0][0])
         dim1 = len(x1)
         dim2 = len(x2)
         total_size = 0
@@ -689,11 +684,11 @@ class ReverseModeDerivativeArray():
         # Save the location at which the partial derivatives are evaluated.
         self._x1 = deepcopy(x1)
         self._x2 = deepcopy(x2)
-        if self.deriv_arrays[0][0].ndim != 1:
+        if self._deriv_arrays[0][0].ndim != 1:
             raise ValueError(
                 'The base function is expected to evaluate to a 1d vector.')
 
-        self.deriv_arrays = \
+        self._deriv_arrays = \
             [[ None for _ in range(self._order2 + 1)] \
                 for _ in range(self._order1 + 1)]
         for x1_ind in range(self._order1 + 1):
@@ -701,8 +696,11 @@ class ReverseModeDerivativeArray():
                 if verbose:
                     print('Evaluating the derivative {}, {}'.format(
                         x1_ind, x2_ind))
-                self.deriv_arrays[x1_ind][x2_ind] = \
+                self._deriv_arrays[x1_ind][x2_ind] = \
                     self._eval_deriv_arrays[x1_ind][x2_ind](x1, x2)
+
+    def deriv_arrays(self, order1, order2):
+        return self._deriv_arrays[order1][order2]
 
     def _check_location(self, x1, x2, tol=1e-8):
         if (np.max(np.abs(x1 - self._x1)) > tol) or \
@@ -731,7 +729,67 @@ class ReverseModeDerivativeArray():
         # This keeps the first dimension of the partial derivative array,
         # and sums over the x1 first, then the x2.  This needs to match the
         # order in which the partial derivatives are taken in `__init__`.
-        return _contract_tensor(self.deriv_arrays[order1][order2], dx1s, dx2s)
+        return _contract_tensor(
+            self._deriv_arrays[order1][order2], dx1s, dx2s)
+
+
+class ReorderedReverseModeDerivativeArray():
+    """
+    Like a ReverseModeDerivativeArray, but takes derivatives with respect
+    to the larger dimension last for efficiency.
+
+    ReverseModeDerivativeArray takes derivatives with respect to the
+    second variable last.  The second variable should have the largest
+    dimension for efficient automatic differentiation.  This class wraps
+    the methods of ReverseModeDerivativeArray, swapping the order of the
+    arguments if necessary to evaluate derivatives in the more efficient
+    direction.
+    """
+    def __init__(self, fun, order1, order2, swapped=None):
+        self._swapped = swapped
+
+        # The underlying ReverseModeDerivativeArray will be with respect to
+        # z1, z2 for the purposes of naming variables.
+        if self._swapped:
+            self._orderz1 = order2
+            self._orderz2 = order1
+        else:
+            self._orderz1 = order1
+            self._orderz2 = order2
+
+        def _fun(z1, z2):
+            return fun(*(self._swapped_args(z1, z2)))
+        self._fun = _fun
+
+        self._rmda = ReverseModeDerivativeArray(
+            fun=self._fun, order1=self._orderz1, order2=self._orderz2)
+
+    def _swapped_args(self, x1, x2):
+        if self._swapped:
+            return x2, x1
+        else:
+            return x1, x2
+
+    def set_evaluation_location(self, x1, x2, force=False, verbose=False):
+        z1, z2 = self._swapped_args(x1, x2)
+        return self._rmda.set_evaluation_location(
+            x1=z1, x2=z2, force=force, verbose=verbose)
+
+    def eval_directional_derivative(self, x1, x2, dx1s, dx2s, validate=True):
+        z1, z2 = self._swapped_args(x1, x2)
+        dz1s, dz2s = self._swapped_args(dx1s, dx2s)
+        return self._rmda.eval_directional_derivative(
+            z1, z2, dz1s, dz2s, validate=validate)
+
+    def deriv_arrays(self, order1, order2):
+        if self._swapped:
+            orig_array = self._rmda.deriv_arrays(order2, order1)
+            # Derivatives with respect to the second variable come first
+            # (after the axis of the base function), and need to be at the end.
+            axes2 = np.arange(order2) + 1
+            return np.moveaxis(orig_array, axes2, -1 * axes2)
+        else:
+            return self._rmda.deriv_arrays(order1, order2)
 
 
 def _consolidate_terms(dterms):
@@ -824,7 +882,7 @@ class ParametricSensitivityTaylorExpansion(object):
         # the Hessian will have an extra dimension.  This is a confusing
         # error that we could catch explicitly at the cost of an extra
         # function evaluation.  Is it worth it?
-        hess_solver = SystemSolver(hess0, 'factorization')
+        hess_solver = solver_lib.get_cholesky_solver(hess0)
 
         return cls(
             estimating_equation=estimating_equation,
@@ -860,8 +918,8 @@ class ParametricSensitivityTaylorExpansion(object):
             The value of ``hyper_par`` at which ``input_val0`` was found.
         order : `int`
             The maximum order of the Taylor series to be calculated.
-        hess_solver : `SystemSolver`
-            A class that implements a solution to the linear system
+        hess_solver : `function`
+            A function that takes a single argument, `v`, and returns
 
             .. math::
 
@@ -920,17 +978,16 @@ class ParametricSensitivityTaylorExpansion(object):
 
         self._order = order
 
-        # You need one more gradient derivative than the order of the Taylor
-        # approximation.
+        # In fact can't this be self._order - 1?
         if self._max_input_order is None:
-            order1 = self._order + 1
+            order1 = self._order
         else:
-            order1 = min(self._order + 1, self._max_input_order)
+            order1 = min(self._order, self._max_input_order)
 
         if self._max_hyper_order is None:
-            order2 = self._order + 2
+            order2 = self._order
         else:
-            order2 = min(self._order + 2, self._max_hyper_order)
+            order2 = min(self._order, self._max_hyper_order)
 
         if self._forward_mode:
             self._deriv_array = ForwardModeDerivativeArray(
@@ -938,10 +995,15 @@ class ParametricSensitivityTaylorExpansion(object):
                 order1=order1,
                 order2=order2)
         else:
-            self._deriv_array = ReverseModeDerivativeArray(
+            # If the input has higher dimension than the hyperparameter,
+            # we want to take reverse mode derivatives with respect to
+            # the hyperparameter first, so swap the order of the arguments.
+            swapped = len(self._input_val0) > len(self._hyper_val0)
+            self._deriv_array = ReorderedReverseModeDerivativeArray(
                 self._objective_function_eta_grad,
                 order1=order1,
-                order2=order2)
+                order2=order2,
+                swapped=swapped)
 
         def differentiate_terms(dterms):
             dterms_derivs = []
@@ -1010,18 +1072,24 @@ class ParametricSensitivityTaylorExpansion(object):
                     eta_derivs=input_derivs,
                     eval_directional_derivative= \
                         self._deriv_array.eval_directional_derivative)
-        return -1 * self.hess_solver.solve(vec)
+        return -1 * self.hess_solver(vec)
 
+
+    def _get_default_max_order(self, max_order):
+        if max_order is None:
+            return self._order
+        if max_order <= 0:
+            raise ValueError('max_order must be greater than zero.')
+        if max_order > self._order:
+            raise ValueError(
+                'max_order must be no greater than the order={}'.format(
+                    self._order))
+        return max_order
 
     def evaluate_input_derivs(self, dhyper, max_order=None):
         """Return a list of the derivatives dkinput / dhyperk dhyper^k
         """
-        if max_order is None:
-            max_order = self._order
-        if max_order > self._order:
-            raise ValueError(
-                '`max_order` must be no greater than the order {}'.format(
-                    self._order))
+        max_order = self._get_default_max_order(max_order)
         input_derivs = []
         for k in range(1, max_order + 1):
             dinputk_dhyperk = \
@@ -1037,22 +1105,13 @@ class ParametricSensitivityTaylorExpansion(object):
                                      max_order=None):
         """Return the terms in a Taylor series approximation.
         """
-        if max_order is None:
-            max_order = self._order
-        if max_order <= 0:
-            raise ValueError('max_order must be greater than zero.')
-        if max_order > self._order:
-            raise ValueError(
-                'max_order must be no greater than the order={}'.format(
-                    self._order))
-
+        max_order = self._get_default_max_order(max_order)
         if add_offset:
             dinput_terms = [self._input_val0]
         else:
             dinput_terms = [np.zeros_like(self._input_val0)]
         dhyper = new_hyper_val - self._hyper_val0
-        input_derivs = \
-            self.evaluate_input_derivs(dhyper, max_order=max_order)
+        input_derivs = self.evaluate_input_derivs(dhyper, max_order=max_order)
 
         for k in range(1, max_order + 1):
             dinput_terms.append(input_derivs[k - 1] / float(factorial(k)))

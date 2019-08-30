@@ -4,7 +4,7 @@ from vittles.sensitivity_lib import \
 
 from vittles.sparse_hessian_lib import SparseBlockHessian
 from vittles.lr_cov_lib import LinearResponseCovariances
-from vittles.solver_lib import SystemSolver
+import vittles.solver_lib
 
 from ._version import get_versions
 __version__ = get_versions()['version']
