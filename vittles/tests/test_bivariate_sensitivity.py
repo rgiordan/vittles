@@ -8,7 +8,7 @@ from numpy.testing import assert_array_almost_equal
 import unittest
 
 import vittles
-from vittles.bivariate_sensitivity import CrossSensitivity
+from vittles.bivariate_sensitivity import CrossSensitivity, OptimumChecker
 
 class CrossSensitivityTest(unittest.TestCase):
     def test_cross(self):
@@ -216,17 +216,39 @@ class CrossSensitivityTest(unittest.TestCase):
 
         dlambda = -1 * lam_base
 
-        dtheta_correction = cross_sens.evaluate(dlambda, dw)
-        print('Correction:\t',    vecsize(dtheta_correction))
-        print('Rel. crctn.:\t', vecsize(dtheta_correction)  / vecsize(dtheta))
-
+        dtheta_correction_grad = cross_sens.evaluate(dlambda, dw)
+        print('Correction:\t',    vecsize(dtheta_correction_grad))
+        print('Rel. crctn.:\t',
+            vecsize(dtheta_correction_grad)  / vecsize(dtheta))
 
         # The target of the improved approximation is the sensitivity at the
         # new optimum.
 
         print('Uncorrected:\t', np.sum(np.abs(dtheta_0 - dtheta)))
         print('Corrected:\t',
-            np.sum(np.abs(dtheta_0 - (dtheta + dtheta_correction))))
+            np.sum(np.abs(dtheta_0 - (dtheta + dtheta_correction_grad))))
+
+        ##############################
+        # Test OptimumChecker
+
+        def w_obj(theta, w):
+            return -1 * log_lik(theta, w, x, y, y_var)
+
+        opt_check = OptimumChecker(
+            estimating_equation=autograd.jacobian(w_obj, argnum=0),
+            solver=solver,
+            input_base=theta_base,
+            hyper_base=w_base)
+
+        assert_array_almost_equal(
+            newton_step, opt_check.get_newton_step())
+
+        assert_array_almost_equal(
+            dtheta_1, opt_check.get_dinput_dhyper(dw))
+
+        assert_array_almost_equal(
+            theta_base + dtheta_1 + dtheta_correction,
+            opt_check.evaluate(new_w))
 
 
 if __name__ == '__main__':
