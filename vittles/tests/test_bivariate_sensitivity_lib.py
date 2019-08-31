@@ -8,7 +8,8 @@ from numpy.testing import assert_array_almost_equal
 import unittest
 
 import vittles
-from vittles.bivariate_sensitivity import CrossSensitivity, OptimumChecker
+from vittles.bivariate_sensitivity_lib import \
+    CrossSensitivity, OptimumChecker
 
 class CrossSensitivityTest(unittest.TestCase):
     def test_cross(self):
