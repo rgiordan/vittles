@@ -194,6 +194,7 @@ class OptimumChecker():
         """Return the first-order approximation to the change in
         dinput_dhyper as you take a Newton step.
         """
+        dhyper = hyper_new - self._hyper_base
         if dinput_dhyper is None:
             dinput_dhyper = self.get_dinput_dhyper(dhyper)
         dinput_dhyper_correction = self.correction(
