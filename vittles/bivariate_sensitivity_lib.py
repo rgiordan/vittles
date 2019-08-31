@@ -173,8 +173,8 @@ class OptimumChecker():
         """
         return self._cross_sens.get_di1(dhyper)
 
-    def evaluate(self, hyper_new, dinput_dhyper=None, newton_step=None):
-        """Return the first-order approximation to the change in
+    def correction(self, hyper_new, dinput_dhyper=None, newton_step=None):
+        """Return the first-order correction to the change in
         dinput_dhyper as you take a Newton step.
         """
         dhyper = hyper_new - self._hyper_base
@@ -187,4 +187,15 @@ class OptimumChecker():
                 dhyper, self._dlam,
                 di1=dinput_dhyper,
                 di2=newton_step)
+        return dinput_dhyper_correction
+        return self._input_base + dinput_dhyper + dinput_dhyper_correction
+
+    def evaluate(self, hyper_new, dinput_dhyper=None, newton_step=None):
+        """Return the first-order approximation to the change in
+        dinput_dhyper as you take a Newton step.
+        """
+        if dinput_dhyper is None:
+            dinput_dhyper = self.get_dinput_dhyper(dhyper)
+        dinput_dhyper_correction = self.correction(
+            hyper_new, dinput_dhyper=dinput_dhyper, newton_step=newton_step)
         return self._input_base + dinput_dhyper + dinput_dhyper_correction
