@@ -82,197 +82,6 @@ def get_linear_function(return_val0, arg_val0, dreturn_darg):
     return get_return_par
 
 
-class HyperparameterSensitivityLinearApproximation:
-    """
-    Linearly approximate dependence of an optimum on a hyperparameter.
-
-    Suppose we have an optimization problem in which the objective
-    depends on a hyperparameter:
-
-    .. math::
-
-        \hat{\\theta} = \mathrm{argmin}_{\\theta} f(\\theta, \\lambda).
-
-    The optimal parameter, :math:`\hat{\\theta}`, is a function of
-    :math:`\\lambda` through the optimization problem.  In general, this
-    dependence is complex and nonlinear.  To approximate this dependence,
-    this class uses the linear approximation:
-
-    .. math::
-
-        \hat{\\theta}(\\lambda) \\approx \hat{\\theta}(\\lambda_0) +
-            \\frac{d\hat{\\theta}}{d\\lambda}|_{\\lambda_0}
-                (\\lambda - \\lambda_0).
-
-    In terms of the arguments to this function,
-    :math:`\\theta` corresponds to ``opt_par``,
-    :math:`\\lambda` corresponds to ``hyper_par``,
-    and :math:`f` corresponds to ``objective_fun``.
-
-    Methods
-    ------------
-    set_base_values:
-        Set the base values, :math:`\\lambda_0` and
-        :math:`\\theta_0 := \hat\\theta(\\lambda_0)`, at which the linear
-        approximation is evaluated.
-    get_dopt_dhyper:
-        Return the Jacobian matrix
-        :math:`\\frac{d\hat{\\theta}}{d\\lambda}|_{\\lambda_0}` in flattened
-        space.
-    get_hessian_at_opt:
-        Return the Hessian of the objective function in the
-        flattened space.
-    predict_opt_par_from_hyper_par:
-        Use the linear approximation to predict
-        the value of ``opt_par`` from a value of ``hyper_par``.
-    """
-    def __init__(
-        self,
-        objective_fun,
-        opt_par_value,
-        hyper_par_value,
-        validate_optimum=False,
-        hessian_at_opt=None,
-        cross_hess_at_opt=None,
-        hyper_par_objective_fun=None,
-        grad_tol=1e-8):
-        """
-        Parameters
-        --------------
-        objective_fun : `callable`
-            The objective function taking two positional arguments,
-            - ``opt_par``: The parameter to be optimized (`numpy.ndarray` (N,))
-            - ``hyper_par``: A hyperparameter (`numpy.ndarray` (N,))
-            and returning a real value to be minimized.
-        opt_par_value :  `numpy.ndarray` (N,)
-            The value of ``opt_par`` at which ``objective_fun`` is
-            optimized for the given value of ``hyper_par_value``.
-        hyper_par_value : `numpy.ndarray` (M,)
-            The value of ``hyper_par`` at which ``opt_par`` optimizes
-            ``objective_fun``.
-        validate_optimum : `bool`, optional
-            When setting the values of ``opt_par`` and ``hyper_par``, check
-            that ``opt_par`` is, in fact, a critical point of
-            ``objective_fun``.
-        hessian_at_opt : `numpy.ndarray` (N,N), optional
-            The Hessian of ``objective_fun`` at the optimum.  If not specified,
-            it is calculated using automatic differentiation.
-        cross_hess_at_opt : `numpy.ndarray`  (N, M)
-            Optional.  The second derivative of the objective with respect to
-            ``input_val`` then ``hyper_val``.
-            If not specified it is calculated at initialization.
-        hyper_par_objective_fun : `callable`, optional
-            The part of ``objective_fun`` depending on both ``opt_par`` and
-            ``hyper_par``.  The arguments must be the same as
-            ``objective_fun``:
-            - ``opt_par``: The parameter to be optimized (`numpy.ndarray` (N,))
-            - ``hyper_par``: A hyperparameter (`numpy.ndarray` (N,))
-            This can be useful if only a small part of the objective function
-            depends on both ``opt_par`` and ``hyper_par``.  If not specified,
-            ``objective_fun`` is used.
-        grad_tol : `float`, optional
-            The tolerance used to check that the gradient is approximately
-            zero at the optimum.
-        """
-
-        # Set the necessary functions using the objective function.
-        self._objective_fun = objective_fun
-        self._obj_fun_grad = autograd.grad(self._objective_fun, argnum=0)
-        self._obj_fun_hessian = autograd.hessian(self._objective_fun, argnum=0)
-        # self._obj_fun_hvp = autograd.hessian_vector_product(
-        #     self._objective_fun, argnum=0)
-
-        if hyper_par_objective_fun is None:
-            self._hyper_par_objective_fun = self._objective_fun
-        else:
-            self._hyper_par_objective_fun = hyper_par_objective_fun
-
-        # TODO: is this the right default order?  Make this flexible.
-        self._hyper_obj_fun_grad = \
-            autograd.grad(self._hyper_par_objective_fun, argnum=0)
-        self._hyper_obj_cross_hess = autograd.jacobian(
-            self._hyper_obj_fun_grad, argnum=1)
-
-        self._grad_tol = grad_tol
-
-        self.set_base_values(
-            opt_par_value, hyper_par_value,
-            hessian_at_opt, cross_hess_at_opt,
-            validate_optimum=validate_optimum,
-            grad_tol=self._grad_tol)
-
-    def set_base_values(self,
-                        opt_par_value, hyper_par_value,
-                        hessian_at_opt, cross_hess_at_opt,
-                        validate_optimum=True, grad_tol=None):
-
-        # Set the values of the optimal parameters.
-        self._opt0 = deepcopy(opt_par_value)
-        self._hyper0 = deepcopy(hyper_par_value)
-
-        # Set the values of the Hessian at the optimum.
-        if hessian_at_opt is None:
-            self._hess0 = self._obj_fun_hessian(self._opt0, self._hyper0)
-        else:
-            self._hess0 = hessian_at_opt
-        if self._hess0.shape != (len(self._opt0), len(self._opt0)):
-            raise ValueError('``hessian_at_opt`` is the wrong shape.')
-
-        self.hess_solver = solver_lib.get_cholesky_solver(self._hess0)
-
-        if validate_optimum:
-            if grad_tol is None:
-                grad_tol = self._grad_tol
-
-            # Check that the gradient of the objective is zero at the optimum.
-            grad0 = self._obj_fun_grad(self._opt0, self._hyper0)
-            newton_step = -1 * self.hess_solver(grad0)
-
-            newton_step_norm = np.linalg.norm(newton_step)
-            if newton_step_norm > grad_tol:
-                err_msg = \
-                    'The gradient is not zero at the proposed optimal ' + \
-                    'values.  ||newton_step|| = {} > {} = grad_tol'.format(
-                        newton_step_norm, grad_tol)
-                raise ValueError(err_msg)
-
-        if cross_hess_at_opt is None:
-            self._cross_hess = self._hyper_obj_cross_hess(self._opt0, self._hyper0)
-        else:
-            self._cross_hess = cross_hess_at_opt
-        if self._cross_hess.shape != (len(self._opt0), len(self._hyper0)):
-            raise ValueError('``cross_hess_at_opt`` is the wrong shape.')
-
-        self._sens_mat = -1 * self.hess_solver(self._cross_hess)
-
-
-    # Methods:
-    def get_dopt_dhyper(self):
-        return self._sens_mat
-
-    def get_hessian_at_opt(self):
-        return self._hess0
-
-    def predict_opt_par_from_hyper_par(self, new_hyper_par_value):
-        """
-        Predict ``opt_par`` using the linear approximation.
-
-        Parameters
-        ------------
-        new_hyper_par_value: `numpy.ndarray` (M,)
-            The value of ``hyper_par`` at which to approximate ``opt_par``.
-        """
-        return \
-            self._opt0 + \
-            self._sens_mat @ (new_hyper_par_value - self._hyper0)
-
-
-    def get_opt_par_function(self):
-        """Return a differentiable function returning the optimal value.
-        """
-        return get_linear_function(self._opt0, self._hyper0, self._sens_mat)
-
-
 class EstimatingEquationLinearApproximation:
     """
     Linearly approximate the dependence of the solution of an estimating
@@ -418,13 +227,13 @@ class EstimatingEquationLinearApproximation:
 
 
     # Methods:
-    def get_dopt_dhyper(self):
+    def get_dinput_dhyper(self):
         return self._sens_mat
 
     def hess_solver(self):
         return self._hess_solver
 
-    def predict_opt_par_from_hyper_par(self, new_hyper_par_value):
+    def predict_input_par_from_hyper_par(self, new_hyper_par_value):
         """
         Predict ``input_par`` using the linear approximation.
 
@@ -438,11 +247,213 @@ class EstimatingEquationLinearApproximation:
             self._sens_mat @ (new_hyper_par_value - self._hyper_val0)
 
 
-    def get_opt_par_function(self):
+    def get_input_par_function(self):
         """Return a differentiable function returning the optimal value.
         """
         return get_linear_function(
             self._input_val0, self._hyper_val0, self._sens_mat)
+
+
+
+class HyperparameterSensitivityLinearApproximation(EstimatingEquationLinearApproximation):
+    """
+    Linearly approximate dependence of an optimum on a hyperparameter.
+
+    Suppose we have an optimization problem in which the objective
+    depends on a hyperparameter:
+
+    .. math::
+
+        \hat{\\theta} = \mathrm{argmin}_{\\theta} f(\\theta, \\lambda).
+
+    The optimal parameter, :math:`\hat{\\theta}`, is a function of
+    :math:`\\lambda` through the optimization problem.  In general, this
+    dependence is complex and nonlinear.  To approximate this dependence,
+    this class uses the linear approximation:
+
+    .. math::
+
+        \hat{\\theta}(\\lambda) \\approx \hat{\\theta}(\\lambda_0) +
+            \\frac{d\hat{\\theta}}{d\\lambda}|_{\\lambda_0}
+                (\\lambda - \\lambda_0).
+
+    In terms of the arguments to this function,
+    :math:`\\theta` corresponds to ``opt_par``,
+    :math:`\\lambda` corresponds to ``hyper_par``,
+    and :math:`f` corresponds to ``objective_fun``.
+
+    Methods
+    ------------
+    set_base_values:
+        Set the base values, :math:`\\lambda_0` and
+        :math:`\\theta_0 := \hat\\theta(\\lambda_0)`, at which the linear
+        approximation is evaluated.
+    get_dopt_dhyper:
+        Return the Jacobian matrix
+        :math:`\\frac{d\hat{\\theta}}{d\\lambda}|_{\\lambda_0}` in flattened
+        space.
+    get_hessian_at_opt:
+        Return the Hessian of the objective function in the
+        flattened space.
+    predict_opt_par_from_hyper_par:
+        Use the linear approximation to predict
+        the value of ``opt_par`` from a value of ``hyper_par``.
+    """
+    def __init__(
+        self,
+        objective_fun,
+        opt_par_value,
+        hyper_par_value,
+        validate_optimum=False,
+        hessian_at_opt=None,
+        cross_hess_at_opt=None,
+        hyper_par_objective_fun=None,
+        grad_tol=1e-8):
+        """
+        Parameters
+        --------------
+        objective_fun : `callable`
+            The objective function taking two positional arguments,
+            - ``opt_par``: The parameter to be optimized (`numpy.ndarray` (N,))
+            - ``hyper_par``: A hyperparameter (`numpy.ndarray` (N,))
+            and returning a real value to be minimized.
+        opt_par_value :  `numpy.ndarray` (N,)
+            The value of ``opt_par`` at which ``objective_fun`` is
+            optimized for the given value of ``hyper_par_value``.
+        hyper_par_value : `numpy.ndarray` (M,)
+            The value of ``hyper_par`` at which ``opt_par`` optimizes
+            ``objective_fun``.
+        validate_optimum : `bool`, optional
+            When setting the values of ``opt_par`` and ``hyper_par``, check
+            that ``opt_par`` is, in fact, a critical point of
+            ``objective_fun``.
+        hessian_at_opt : `numpy.ndarray` (N,N), optional
+            The Hessian of ``objective_fun`` at the optimum.  If not specified,
+            it is calculated using automatic differentiation.
+        cross_hess_at_opt : `numpy.ndarray`  (N, M)
+            Optional.  The second derivative of the objective with respect to
+            ``input_val`` then ``hyper_val``.
+            If not specified it is calculated at initialization.
+        hyper_par_objective_fun : `callable`, optional
+            The part of ``objective_fun`` depending on both ``opt_par`` and
+            ``hyper_par``.  The arguments must be the same as
+            ``objective_fun``:
+            - ``opt_par``: The parameter to be optimized (`numpy.ndarray` (N,))
+            - ``hyper_par``: A hyperparameter (`numpy.ndarray` (N,))
+            This can be useful if only a small part of the objective function
+            depends on both ``opt_par`` and ``hyper_par``.  If not specified,
+            ``objective_fun`` is used.
+        grad_tol : `float`, optional
+            The tolerance used to check that the gradient is approximately
+            zero at the optimum.
+        """
+
+        # Set the necessary functions using the objective function.
+        obj_fun_grad = autograd.grad(objective_fun, argnum=0)
+
+        if hyper_par_objective_fun is None:
+            hyper_par_objective_fun = objective_fun
+
+        # TODO: is this the right default order?  Make this flexible.
+        hyper_obj_fun_grad = autograd.grad(hyper_par_objective_fun, argnum=0)
+
+        # Set the values of the Hessian at the optimum.
+        if hessian_at_opt is None:
+            obj_fun_hessian = autograd.hessian(objective_fun, argnum=0)
+            self._hess0 = obj_fun_hessian(input_val0, hyper_val0)
+        else:
+            self._hess0 = hessian_at_opt
+        if self._hess0.shape != (len(input_val0), len(input_val0)):
+            raise ValueError('``hessian_at_opt`` is the wrong shape.')
+
+        hess_solver = solver_lib.get_cholesky_solver(self._hess0)
+
+        super().__init__(
+            self,
+            estimating_equation=obj_fun_grad,
+            input_val0=opt_par_value,
+            hyper_val0=hyper_par_value,
+            hess_solver=hess_solver,
+            validate_solution=validate_optimum,
+            estimating_equation_jac0=cross_hess_at_opt,
+            hyper_par_estimating_equation=hyper_obj_fun_grad,
+            solution_tol=grad_tol)
+
+        #
+        # self.set_base_values(
+        #     opt_par_value, hyper_par_value,
+        #     hessian_at_opt, cross_hess_at_opt,
+        #     validate_optimum=validate_optimum,
+        #     grad_tol=self._grad_tol)
+        #
+    # def set_base_values(self,
+    #                     opt_par_value, hyper_par_value,
+    #                     hessian_at_opt, cross_hess_at_opt,
+    #                     validate_optimum=True, grad_tol=None):
+    #
+    #     # Set the values of the optimal parameters.
+    #     self._opt0 = deepcopy(opt_par_value)
+    #     self._hyper0 = deepcopy(hyper_par_value)
+    #
+    #     # Set the values of the Hessian at the optimum.
+    #     if hessian_at_opt is None:
+    #         self._hess0 = self._obj_fun_hessian(self._opt0, self._hyper0)
+    #     else:
+    #         self._hess0 = hessian_at_opt
+    #     if self._hess0.shape != (len(self._opt0), len(self._opt0)):
+    #         raise ValueError('``hessian_at_opt`` is the wrong shape.')
+    #
+    #     self.hess_solver = solver_lib.get_cholesky_solver(self._hess0)
+    #
+    #     if validate_optimum:
+    #         if grad_tol is None:
+    #             grad_tol = self._grad_tol
+    #
+    #         # Check that the gradient of the objective is zero at the optimum.
+    #         grad0 = self._obj_fun_grad(self._opt0, self._hyper0)
+    #         newton_step = -1 * self.hess_solver(grad0)
+    #
+    #         newton_step_norm = np.linalg.norm(newton_step)
+    #         if newton_step_norm > grad_tol:
+    #             err_msg = \
+    #                 'The gradient is not zero at the proposed optimal ' + \
+    #                 'values.  ||newton_step|| = {} > {} = grad_tol'.format(
+    #                     newton_step_norm, grad_tol)
+    #             raise ValueError(err_msg)
+    #
+    #     if cross_hess_at_opt is None:
+    #         self._cross_hess = self._hyper_obj_cross_hess(self._opt0, self._hyper0)
+    #     else:
+    #         self._cross_hess = cross_hess_at_opt
+    #     if self._cross_hess.shape != (len(self._opt0), len(self._hyper0)):
+    #         raise ValueError('``cross_hess_at_opt`` is the wrong shape.')
+    #
+    #     self._sens_mat = -1 * self.hess_solver(self._cross_hess)
+    #
+
+    # Methods:
+    def get_dopt_dhyper(self):
+        return super().get_dinput_dhyper()
+
+    def get_hessian_at_opt(self):
+        return self._hess0
+
+    def predict_opt_par_from_hyper_par(self, new_hyper_par_value):
+        """
+        Predict ``opt_par`` using the linear approximation.
+
+        Parameters
+        ------------
+        new_hyper_par_value: `numpy.ndarray` (M,)
+            The value of ``hyper_par`` at which to approximate ``opt_par``.
+        """
+        return super().predict_input_par_from_hyper_par(new_hyper_par_value)
+
+
+    def get_opt_par_function(self):
+        """Return a differentiable function returning the optimal value.
+        """
+        return super().get_input_par_function()
 
 
 ################################
