@@ -456,8 +456,7 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
                                    theta_free, lambda_free,
                                    use_hessian_at_opt,
                                    use_cross_hessian_at_opt,
-                                   use_hyper_par_objective_fun,
-                                   use_estimating_equation):
+                                   use_hyper_par_objective_fun):
         model = QuadraticModel(dim=dim)
         lam0 = model.lambda_pattern.flatten(
             model.get_default_lambda(), free=lambda_free)
@@ -501,32 +500,18 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
                     free=[theta_free, lambda_free],
                     argnums=[0, 1],
                     patterns=[model.theta_pattern, model.lambda_pattern])
-            hyper_par_estimating_equation = \
-                autograd.grad(hyper_par_objective_fun, argnum=0)
         else:
             hyper_par_objective_fun = None
-            hyper_par_estimating_equation = None
 
-        if use_estimating_equation:
-            parametric_sens = \
-                vittles.HyperparameterSensitivityLinearApproximation.estimating_equation(
-                    estimating_equation=get_objective_for_opt_grad,
-                    opt_par_value=theta0,
-                    hyper_par_value=lam0,
-                    hessian_at_opt=hess0,
-                    cross_hess_at_opt=cross_hess0,
-                    hyper_par_estimating_equation=hyper_par_estimating_equation,
-                    validate_optimum=True)
-        else:
-            parametric_sens = \
-                vittles.HyperparameterSensitivityLinearApproximation(
-                    objective_fun=get_objective_flat,
-                    opt_par_value=theta0,
-                    hyper_par_value=lam0,
-                    hessian_at_opt=hess0,
-                    cross_hess_at_opt=cross_hess0,
-                    hyper_par_objective_fun=hyper_par_objective_fun,
-                    validate_optimum=True)
+        parametric_sens = \
+            vittles.HyperparameterSensitivityLinearApproximation(
+                objective_fun=get_objective_flat,
+                opt_par_value=theta0,
+                hyper_par_value=lam0,
+                hessian_at_opt=hess0,
+                cross_hess_at_opt=cross_hess0,
+                hyper_par_objective_fun=hyper_par_objective_fun,
+                validate_optimum=True)
 
         epsilon = 0.001
         lam1 = lam0 + epsilon
@@ -617,18 +602,15 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
         ft_vec = [False, True]
         dim = 3
         for (theta_free, lambda_free, use_hess,
-             use_hyperobj, use_cross_hess, use_est_eq) in \
-            itertools.product(ft_vec, ft_vec, ft_vec, ft_vec, ft_vec, ft_vec):
+             use_hyperobj, use_cross_hess) in \
+            itertools.product(ft_vec, ft_vec, ft_vec, ft_vec, ft_vec):
 
             print(('theta_free: {}, lambda_free: {}, ' +
-                   'use_hess: {}, use_hyperobj: {}, ' +
-                   'use_est_eq: {}').format(
-                   theta_free, lambda_free, use_hess, use_hyperobj,
-                   use_est_eq))
+                   'use_hess: {}, use_hyperobj: {}').format(
+                   theta_free, lambda_free, use_hess, use_hyperobj))
             self._test_linear_approximation(
                 dim, theta_free, lambda_free,
-                use_hess, use_cross_hess, use_hyperobj,
-                use_est_eq)
+                use_hess, use_cross_hess, use_hyperobj)
 
 
 class TestTaylorExpansion(unittest.TestCase):

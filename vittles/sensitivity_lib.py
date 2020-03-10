@@ -15,6 +15,59 @@ from paragami import FlattenFunctionInput
 from . import solver_lib
 
 
+def get_differentiable_function(input_val0, hyper_val0, dinput_dhyper):
+    """Return a differentiable function returning a pre-specified value and
+    derivative.  This is most useful for using autodiff on functions of
+    optimization parameters.
+    """
+
+    def _check_hyper_par_value(hyper_par, tolerance=1e-8):
+        if np.max(np.abs(hyper_par - hyper_val0)) > tolerance:
+            raise ValueError(
+                'get_input_par must be evaluated at ',
+                hyper_val0, ' != ', hyper_par)
+
+    @primitive
+    def get_input_par(hyper_par):
+        """Evaluate the input as a differentiable function.
+
+        Parameters
+        -------------
+        hyper_par: numeric
+            The value must match `hyper_val0`, but it can be an
+            array box, allowing functions of the optimal parameter to be
+            differentiated with `autograd`.
+        """
+
+        _check_hyper_par_value(hyper_par)
+        return input_val0
+
+    # Reverse mode.
+    def _get_parhat_vjp(ans, hyperpar):
+        _check_hyper_par_value(hyperpar)
+
+        # Make this primitive to prevent attempting higher-order derivatives.
+        # To do so efficiently will require a higher order approximation.
+        @primitive
+        def vjp(g):
+            return g.T @ dinput_dhyper
+        return vjp
+
+    # Forward mode.
+    # Make this primitive to prevent attempting higher-order derivatives.
+    # To do so efficiently will require a higher order approximation.
+    @primitive
+    def _get_parhat_jvp(g, ans, hyperpar):
+        _check_hyper_par_value(hyperpar)
+        return dinput_dhyper @ g
+
+    # Define the derivatives of `get_opt_par`
+    defvjp(get_input_par, _get_parhat_vjp)
+    defjvp(get_input_par, _get_parhat_jvp)
+
+    return get_input_par
+
+
 class HyperparameterSensitivityLinearApproximation:
     """
     Linearly approximate dependence of an optimum on a hyperparameter.
@@ -108,32 +161,23 @@ class HyperparameterSensitivityLinearApproximation:
             zero at the optimum.
         """
 
-        # This is sadly a hack to allow initialization with only an estimating
-        # equation but allowing backwards compatibility.
-        if objective_fun is None:
-            # Check that everything is already set.
-            assert self._obj_fun_grad is not None
-            assert self._obj_fun_hessian is not None
-            #assert self._obj_fun_hvp is not None
-            assert self._hyper_obj_cross_hess is not None
+        # Set the necessary functions using the objective function.
+        self._objective_fun = objective_fun
+        self._obj_fun_grad = autograd.grad(self._objective_fun, argnum=0)
+        self._obj_fun_hessian = autograd.hessian(self._objective_fun, argnum=0)
+        # self._obj_fun_hvp = autograd.hessian_vector_product(
+        #     self._objective_fun, argnum=0)
+
+        if hyper_par_objective_fun is None:
+            self._hyper_par_objective_fun = self._objective_fun
         else:
-            # Set the necessary functions using the objective function.
-            self._objective_fun = objective_fun
-            self._obj_fun_grad = autograd.grad(self._objective_fun, argnum=0)
-            self._obj_fun_hessian = autograd.hessian(self._objective_fun, argnum=0)
-            # self._obj_fun_hvp = autograd.hessian_vector_product(
-            #     self._objective_fun, argnum=0)
+            self._hyper_par_objective_fun = hyper_par_objective_fun
 
-            if hyper_par_objective_fun is None:
-                self._hyper_par_objective_fun = self._objective_fun
-            else:
-                self._hyper_par_objective_fun = hyper_par_objective_fun
-
-            # TODO: is this the right default order?  Make this flexible.
-            self._hyper_obj_fun_grad = \
-                autograd.grad(self._hyper_par_objective_fun, argnum=0)
-            self._hyper_obj_cross_hess = autograd.jacobian(
-                self._hyper_obj_fun_grad, argnum=1)
+        # TODO: is this the right default order?  Make this flexible.
+        self._hyper_obj_fun_grad = \
+            autograd.grad(self._hyper_par_objective_fun, argnum=0)
+        self._hyper_obj_cross_hess = autograd.jacobian(
+            self._hyper_obj_fun_grad, argnum=1)
 
         self._grad_tol = grad_tol
 
@@ -142,36 +186,6 @@ class HyperparameterSensitivityLinearApproximation:
             hessian_at_opt, cross_hess_at_opt,
             validate_optimum=validate_optimum,
             grad_tol=self._grad_tol)
-
-    @classmethod
-    def estimating_equation(cls,
-                            estimating_equation,
-                            opt_par_value,
-                            hyper_par_value,
-                            validate_optimum=False,
-                            hessian_at_opt=None,
-                            cross_hess_at_opt=None,
-                            hyper_par_estimating_equation=None,
-                            grad_tol=1e-8):
-        # Set the necessary functions from the estimating equation rather than
-        # from an optimization objective.
-        self._obj_fun_grad = estimating_equation
-        self._obj_fun_hessian = autograd.jacobian(self._obj_fun_grad, argnum=0)
-        if hyper_par_estimating_equation is not None:
-            self._hyper_obj_fun_grad = hyper_par_estimating_equation
-        else:
-            self._hyper_obj_fun_grad = self._obj_fun_grad
-        self._hyper_obj_cross_hess = autograd.jacobian(
-            self._hyper_obj_fun_grad, argnum=1)
-
-        return cls(
-            objective_fun=None,
-            opt_par_value=opt_par_value,
-            hyper_par_value=hyper_par_value,
-            validate_optimum=validate_optimum,
-            hessian_at_opt=hessian_at_opt,
-            cross_hess_at_opt=cross_hess_at_opt,
-            grad_tol=grad_tol)
 
     def set_base_values(self,
                         opt_par_value, hyper_par_value,
@@ -238,55 +252,52 @@ class HyperparameterSensitivityLinearApproximation:
             self._opt0 + \
             self._sens_mat @ (new_hyper_par_value - self._hyper0)
 
-    def _check_hyper_par_value(self, hyper_par, tolerance=1e-8):
-        if np.max(np.abs(hyper_par - self._hyper0)) > tolerance:
-            raise ValueError(
-                'get_opt_par must be evaluated at ',
-                self._hyper0, ' != ', hyper_par)
 
     def get_opt_par_function(self):
         """Return a differentiable function returning the optimal value.
         """
+        return get_differentiable_function(
+            self._opt0, self._hyper0, self._sens_mat)
 
-        @primitive
-        def get_opt_par(hyper_par):
-            """Evaluate the optimum as a differentiable function.
-
-            Parameters
-            -------------
-            hyper_par: numeric
-                The value must match `hyper_par_value`, but it can be an
-                array box, allowing functions of the optimal parameter to be
-                differentiated with `autograd`.
-            """
-
-            self._check_hyper_par_value(hyper_par)
-            return self._opt0
-
-        # Reverse mode.
-        def _get_parhat_vjp(ans, hyperpar):
-            self._check_hyper_par_value(hyperpar)
-
-            # Make this primitive to prevent attempting higher-order derivatives.
-            # To do so efficiently will require a higher order approximation.
-            @primitive
-            def vjp(g):
-                return g.T @ self._sens_mat
-            return vjp
-
-        # Forward mode.
-        # Make this primitive to prevent attempting higher-order derivatives.
-        # To do so efficiently will require a higher order approximation.
-        @primitive
-        def _get_parhat_jvp(g, ans, hyperpar):
-            self._check_hyper_par_value(hyperpar)
-            return self._sens_mat @ g
-
-        # Define the derivatives of `get_opt_par`
-        defvjp(get_opt_par, _get_parhat_vjp)
-        defjvp(get_opt_par, _get_parhat_jvp)
-
-        return get_opt_par
+        # @primitive
+        # def get_opt_par(hyper_par):
+        #     """Evaluate the optimum as a differentiable function.
+        #
+        #     Parameters
+        #     -------------
+        #     hyper_par: numeric
+        #         The value must match `hyper_par_value`, but it can be an
+        #         array box, allowing functions of the optimal parameter to be
+        #         differentiated with `autograd`.
+        #     """
+        #
+        #     self._check_hyper_par_value(hyper_par)
+        #     return self._opt0
+        #
+        # # Reverse mode.
+        # def _get_parhat_vjp(ans, hyperpar):
+        #     self._check_hyper_par_value(hyperpar)
+        #
+        #     # Make this primitive to prevent attempting higher-order derivatives.
+        #     # To do so efficiently will require a higher order approximation.
+        #     @primitive
+        #     def vjp(g):
+        #         return g.T @ self._sens_mat
+        #     return vjp
+        #
+        # # Forward mode.
+        # # Make this primitive to prevent attempting higher-order derivatives.
+        # # To do so efficiently will require a higher order approximation.
+        # @primitive
+        # def _get_parhat_jvp(g, ans, hyperpar):
+        #     self._check_hyper_par_value(hyperpar)
+        #     return self._sens_mat @ g
+        #
+        # # Define the derivatives of `get_opt_par`
+        # defvjp(get_opt_par, _get_parhat_vjp)
+        # defjvp(get_opt_par, _get_parhat_jvp)
+        #
+        # return get_opt_par
 
 ################################
 # Higher-order approximations. #
