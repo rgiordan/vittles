@@ -372,13 +372,6 @@ class HyperparameterSensitivityLinearApproximation(EstimatingEquationLinearAppro
             hyper_par_estimating_equation=hyper_obj_fun_grad,
             solution_tol=grad_tol)
 
-        #
-        # self.set_base_values(
-        #     opt_par_value, hyper_par_value,
-        #     hessian_at_opt, cross_hess_at_opt,
-        #     validate_optimum=validate_optimum,
-        #     grad_tol=self._grad_tol)
-
     def _get_hessian_solver(self,
                             opt_par_value,
                             hyper_par_value,
@@ -395,7 +388,6 @@ class HyperparameterSensitivityLinearApproximation(EstimatingEquationLinearAppro
         hess_solver = solver_lib.get_cholesky_solver(self._hess0)
         return hess_solver
 
-
     def set_base_values(self,
                         opt_par_value, hyper_par_value,
                         hessian_at_opt, cross_hess_at_opt,
@@ -410,45 +402,6 @@ class HyperparameterSensitivityLinearApproximation(EstimatingEquationLinearAppro
             estimating_equation_jac0=cross_hess_at_opt,
             validate_solution=validate_optimum,
             solution_tol=grad_tol)
-
-    #     self._opt0 = deepcopy(opt_par_value)
-    #     self._hyper0 = deepcopy(hyper_par_value)
-    #
-    #     # Set the values of the Hessian at the optimum.
-    #     if hessian_at_opt is None:
-    #         self._hess0 = self._obj_fun_hessian(self._opt0, self._hyper0)
-    #     else:
-    #         self._hess0 = hessian_at_opt
-    #     if self._hess0.shape != (len(self._opt0), len(self._opt0)):
-    #         raise ValueError('``hessian_at_opt`` is the wrong shape.')
-    #
-    #     self.hess_solver = solver_lib.get_cholesky_solver(self._hess0)
-    #
-    #     if validate_optimum:
-    #         if grad_tol is None:
-    #             grad_tol = self._grad_tol
-    #
-    #         # Check that the gradient of the objective is zero at the optimum.
-    #         grad0 = self._obj_fun_grad(self._opt0, self._hyper0)
-    #         newton_step = -1 * self.hess_solver(grad0)
-    #
-    #         newton_step_norm = np.linalg.norm(newton_step)
-    #         if newton_step_norm > grad_tol:
-    #             err_msg = \
-    #                 'The gradient is not zero at the proposed optimal ' + \
-    #                 'values.  ||newton_step|| = {} > {} = grad_tol'.format(
-    #                     newton_step_norm, grad_tol)
-    #             raise ValueError(err_msg)
-    #
-    #     if cross_hess_at_opt is None:
-    #         self._cross_hess = self._hyper_obj_cross_hess(self._opt0, self._hyper0)
-    #     else:
-    #         self._cross_hess = cross_hess_at_opt
-    #     if self._cross_hess.shape != (len(self._opt0), len(self._hyper0)):
-    #         raise ValueError('``cross_hess_at_opt`` is the wrong shape.')
-    #
-    #     self._sens_mat = -1 * self.hess_solver(self._cross_hess)
-    #
 
     # Methods:
     def get_dopt_dhyper(self):
@@ -475,9 +428,13 @@ class HyperparameterSensitivityLinearApproximation(EstimatingEquationLinearAppro
         return super().get_input_par_function()
 
 
-################################
-# Higher-order approximations. #
-################################
+
+
+
+
+############################################
+# Higher-order directional approximations. #
+############################################
 
 def _append_jvp(fun, num_base_args=1, argnum=0):
     """
