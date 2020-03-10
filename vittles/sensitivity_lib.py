@@ -273,6 +273,178 @@ class HyperparameterSensitivityLinearApproximation:
         return get_linear_function(self._opt0, self._hyper0, self._sens_mat)
 
 
+class EstimatingEquationLinearApproximation:
+    """
+    Linearly approximate the dependence of the solution of an estimating
+    equation on a hyperparameter.
+
+    Suppose we have an estimating equation in which the objective
+    depends on a hyperparameter:
+
+    .. math::
+
+         f(\hat{\\theta}, \\lambda) = 0.
+
+    The solution, :math:`\hat{\\theta}`, is a function of
+    :math:`\\lambda` through the optimization problem.  In general, this
+    dependence is complex and nonlinear.  To approximate this dependence,
+    this class uses the linear approximation:
+
+    .. math::
+
+        \hat{\\theta}(\\lambda) \\approx \hat{\\theta}(\\lambda_0) +
+            \\frac{d\hat{\\theta}}{d\\lambda}|_{\\lambda_0}
+                (\\lambda - \\lambda_0).
+
+    In terms of the arguments to this function,
+    :math:`\\theta` corresponds to ``input_val0``,
+    :math:`\\lambda` corresponds to ``hyper_val0``,
+    and :math:`f` corresponds to ``estimating_equation``.
+    """
+    def __init__(
+        self,
+        estimating_equation,
+        input_val0,
+        hyper_val0,
+        hess_solver,
+        validate_solution=False,
+        estimating_equation_jac0=None,
+        hyper_par_estimating_equation=None,
+        solution_tol=1e-8):
+        """
+        Parameters
+        --------------
+        estimating_equation : `callable`
+            The estimating equation taking two positional arguments,
+            - ``input_par``: The parameter to be solved for (`numpy.ndarray` (N,))
+            - ``hyper_par``: A hyperparameter (`numpy.ndarray` (N,))
+            and returning a `numpy.ndarray` (N,) to be set to zero.
+        input_val0 :  `numpy.ndarray` (N,)
+            The value of ``input_par`` at which ``estimating_equation`` is
+            solved for the given value of ``hyper_val0``.
+        hyper_val0 : `numpy.ndarray` (M,)
+            The value of ``hyper_par`` at which ``input_par`` solves
+            ``estimating_equation``.
+        validate_solution : `bool`, optional
+            When setting the values of ``input_par`` and ``hyper_par``, check
+            that ``input_par`` is, in fact, a solution of
+            ``estimating_equation``.
+        hess_solver : `function`
+            A function that takes a single argument, `v`, and returns
+
+            .. math::
+
+                \\frac{\\partial G}{\\partial \\eta}^{-1} v,
+
+            where :math:`G(\\eta, \\epsilon)` is the estimating equation,
+            and the partial derivative is evaluated at
+            :math:`(\\eta, \\epsilon) =`  (`input_val0`, `hyper_val0`).
+        estimating_equation_jac0 : `numpy.ndarray`  (N, M)
+            Optional.  The partial derivative of `estimating_equation` with
+            respect to  ``hyper_val``.
+            If not specified it is calculated at initialization.
+        hyper_par_estimating_equation : `callable`, optional
+            The part of ``estimating_equation`` depending on both ``input_par``
+            and ``hyper_par``.  The arguments must be the same as
+            ``estimating_equation``.
+            This can be useful if only a small part of the estimating equation
+            depends on both ``input_par`` and ``hyper_par``.  If not specified,
+            ``estimating_equation`` is used.
+        solution_tol : `float`, optional
+            The tolerance used to check that the estimating equation is
+            approximately zero at the inputs.
+        """
+
+        # Set the necessary functions using the objective function.
+        self._estimating_equation = estimating_equation
+        self._estimating_equation_grad = \
+            autograd.jacobian(self._estimating_equation, argnum=0)
+
+        if hyper_par_estimating_equation is None:
+            self._hyper_par_estimating_equation = \
+                self._estimating_equation
+        else:
+            self._hyper_par_estimating_equation = \
+                hyper_par_estimating_equation
+
+        # TODO: is this the right default order?  Make this flexible.
+        self._hyper_ee_fun_jac = \
+            autograd.jacobian(self._hyper_par_estimating_equation, argnum=1)
+
+        self._solution_tol = solution_tol
+        self._hess_solver = hess_solver
+
+        self.set_base_values(
+            input_val0, hyper_val0,
+            estimating_equation_jac0,
+            validate_solution=validate_solution,
+            grad_tol=self._grad_tol)
+
+    def set_base_values(self,
+                        input_val0,
+                        hyper_val0,
+                        estimating_equation_jac0,
+                        validate_solution=True,
+                        solution_tol=None):
+
+        # Set the values of the optimal parameters.
+        self._input_val0 = deepcopy(input_val0)
+        self._hyper_val0 = deepcopy(hyper_val0)
+
+        if validate_solution:
+            if solution_tol is None:
+                solution_tol = self._solution_tol
+
+            # Check that the gradient of the objective is zero at the optimum.
+            ee_val = self._estimating_equation(self._input_val0, self._hyper_val0)
+            ee_norm = np.linalg.norm(ee_val)
+            if ee_norm > solution_tol:
+                err_msg = \
+                    'The estimating equation is not zero at the proposed  ' + \
+                    'values.  ||ee|| = {} > {} = solution_tol'.format(
+                        ee_norm, solution_tol)
+                raise ValueError(err_msg)
+
+        if estimating_equation_jac0 is None:
+            self._estimating_equation_jac0 = \
+                self._hyper_ee_fun_jac(self._input_val0, self._hyper_val0)
+        else:
+            self._estimating_equation_jac0 = estimating_equation_jac0
+        if self._cross_hess.shape != \
+            (len(self._input_val0), len(self._hyper_val0)):
+            raise ValueError('``_estimating_equation_jac0`` is the wrong shape.')
+
+        self._sens_mat = -1 * self._hess_solver(self._estimating_equation_jac0)
+
+
+    # Methods:
+    def get_dopt_dhyper(self):
+        return self._sens_mat
+
+    def hess_solver(self):
+        return self._hess_solver
+
+    def predict_opt_par_from_hyper_par(self, new_hyper_par_value):
+        """
+        Predict ``input_par`` using the linear approximation.
+
+        Parameters
+        ------------
+        new_hyper_par_value: `numpy.ndarray` (M,)
+            The value of ``hyper_par`` at which to approximate ``input_par``.
+        """
+        return \
+            self._input_val0 + \
+            self._sens_mat @ (new_hyper_par_value - self._hyper_val0)
+
+
+    def get_opt_par_function(self):
+        """Return a differentiable function returning the optimal value.
+        """
+        return get_linear_function(
+            self._input_val0, self._hyper_val0, self._sens_mat)
+
+
 ################################
 # Higher-order approximations. #
 ################################
