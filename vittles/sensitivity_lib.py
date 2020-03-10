@@ -108,22 +108,32 @@ class HyperparameterSensitivityLinearApproximation:
             zero at the optimum.
         """
 
-        self._objective_fun = objective_fun
-        self._obj_fun_grad = autograd.grad(self._objective_fun, argnum=0)
-        self._obj_fun_hessian = autograd.hessian(self._objective_fun, argnum=0)
-        self._obj_fun_hvp = autograd.hessian_vector_product(
-            self._objective_fun, argnum=0)
-
-        if hyper_par_objective_fun is None:
-            self._hyper_par_objective_fun = self._objective_fun
+        # This is sadly a hack to allow initialization with only an estimating
+        # equation but allowing backwards compatibility.
+        if objective_fun is None:
+            # Check that everything is already set.
+            assert self._obj_fun_grad is not None
+            assert self._obj_fun_hessian is not None
+            #assert self._obj_fun_hvp is not None
+            assert self._hyper_obj_cross_hess is not None
         else:
-            self._hyper_par_objective_fun = hyper_par_objective_fun
+            # Set the necessary functions using the objective function.
+            self._objective_fun = objective_fun
+            self._obj_fun_grad = autograd.grad(self._objective_fun, argnum=0)
+            self._obj_fun_hessian = autograd.hessian(self._objective_fun, argnum=0)
+            # self._obj_fun_hvp = autograd.hessian_vector_product(
+            #     self._objective_fun, argnum=0)
 
-        # TODO: is this the right default order?  Make this flexible.
-        self._hyper_obj_fun_grad = \
-            autograd.grad(self._hyper_par_objective_fun, argnum=0)
-        self._hyper_obj_cross_hess = autograd.jacobian(
-            self._hyper_obj_fun_grad, argnum=1)
+            if hyper_par_objective_fun is None:
+                self._hyper_par_objective_fun = self._objective_fun
+            else:
+                self._hyper_par_objective_fun = hyper_par_objective_fun
+
+            # TODO: is this the right default order?  Make this flexible.
+            self._hyper_obj_fun_grad = \
+                autograd.grad(self._hyper_par_objective_fun, argnum=0)
+            self._hyper_obj_cross_hess = autograd.jacobian(
+                self._hyper_obj_fun_grad, argnum=1)
 
         self._grad_tol = grad_tol
 
@@ -132,6 +142,36 @@ class HyperparameterSensitivityLinearApproximation:
             hessian_at_opt, cross_hess_at_opt,
             validate_optimum=validate_optimum,
             grad_tol=self._grad_tol)
+
+    @classmethod
+    def estimating_equation(cls,
+                            estimating_equation,
+                            opt_par_value,
+                            hyper_par_value,
+                            validate_optimum=False,
+                            hessian_at_opt=None,
+                            cross_hess_at_opt=None,
+                            hyper_par_estimating_equation=None,
+                            grad_tol=1e-8):
+        # Set the necessary functions from the estimating equation rather than
+        # from an optimization objective.
+        self._obj_fun_grad = estimating_equation
+        self._obj_fun_hessian = autograd.jacobian(self._obj_fun_grad, argnum=0)
+        if hyper_par_estimating_equation is not None:
+            self._hyper_obj_fun_grad = hyper_par_estimating_equation
+        else:
+            self._hyper_obj_fun_grad = self._obj_fun_grad
+        self._hyper_obj_cross_hess = autograd.jacobian(
+            self._hyper_obj_fun_grad, argnum=1)
+
+        return cls(
+            objective_fun=None,
+            opt_par_value=opt_par_value,
+            hyper_par_value=hyper_par_value,
+            validate_optimum=validate_optimum,
+            hessian_at_opt=hessian_at_opt,
+            cross_hess_at_opt=cross_hess_at_opt,
+            grad_tol=grad_tol)
 
     def set_base_values(self,
                         opt_par_value, hyper_par_value,
