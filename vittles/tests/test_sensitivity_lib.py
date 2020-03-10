@@ -601,7 +601,8 @@ class TestHyperparameterSensitivityLinearApproximation(unittest.TestCase):
     def test_quadratic_model(self):
         ft_vec = [False, True]
         dim = 3
-        for (theta_free, lambda_free, use_hess, use_hyperobj, use_cross_hess) in \
+        for (theta_free, lambda_free, use_hess,
+             use_hyperobj, use_cross_hess) in \
             itertools.product(ft_vec, ft_vec, ft_vec, ft_vec, ft_vec):
 
             print(('theta_free: {}, lambda_free: {}, ' +
