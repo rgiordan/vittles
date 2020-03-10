@@ -183,18 +183,18 @@ class EstimatingEquationLinearApproximation:
         self._solution_tol = solution_tol
         self._hess_solver = hess_solver
 
-        self.set_base_values(
+        self.set_location(
             input_val0, hyper_val0,
             estimating_equation_jac0,
             validate_solution=validate_solution,
-            grad_tol=self._grad_tol)
+            solution_tol=solution_tol)
 
-    def set_base_values(self,
-                        input_val0,
-                        hyper_val0,
-                        estimating_equation_jac0,
-                        validate_solution=True,
-                        solution_tol=None):
+    def set_location(self,
+                     input_val0,
+                     hyper_val0,
+                     estimating_equation_jac0,
+                     validate_solution=True,
+                     solution_tol=None):
 
         # Set the values of the optimal parameters.
         self._input_val0 = deepcopy(input_val0)
@@ -219,7 +219,7 @@ class EstimatingEquationLinearApproximation:
                 self._hyper_ee_fun_jac(self._input_val0, self._hyper_val0)
         else:
             self._estimating_equation_jac0 = estimating_equation_jac0
-        if self._cross_hess.shape != \
+        if self._estimating_equation_jac0.shape != \
             (len(self._input_val0), len(self._hyper_val0)):
             raise ValueError('``_estimating_equation_jac0`` is the wrong shape.')
 
@@ -349,26 +349,19 @@ class HyperparameterSensitivityLinearApproximation(EstimatingEquationLinearAppro
         """
 
         # Set the necessary functions using the objective function.
-        obj_fun_grad = autograd.grad(objective_fun, argnum=0)
+        self._objective_fun = objective_fun
+        obj_fun_grad = autograd.grad(self._objective_fun, argnum=0)
 
         if hyper_par_objective_fun is None:
-            hyper_par_objective_fun = objective_fun
+            hyper_par_objective_fun = self._objective_fun
 
         # TODO: is this the right default order?  Make this flexible.
         hyper_obj_fun_grad = autograd.grad(hyper_par_objective_fun, argnum=0)
 
-        # Set the values of the Hessian at the optimum.
-        if hessian_at_opt is None:
-            obj_fun_hessian = autograd.hessian(objective_fun, argnum=0)
-            self._hess0 = obj_fun_hessian(input_val0, hyper_val0)
-        else:
-            self._hess0 = hessian_at_opt
-        if self._hess0.shape != (len(input_val0), len(input_val0)):
-            raise ValueError('``hessian_at_opt`` is the wrong shape.')
+        hess_solver = self._get_hessian_solver(
+            opt_par_value, hyper_par_value, hessian_at_opt)
 
-        hess_solver = solver_lib.get_cholesky_solver(self._hess0)
-
-        super().__init__(
+        EstimatingEquationLinearApproximation.__init__(
             self,
             estimating_equation=obj_fun_grad,
             input_val0=opt_par_value,
@@ -385,13 +378,39 @@ class HyperparameterSensitivityLinearApproximation(EstimatingEquationLinearAppro
         #     hessian_at_opt, cross_hess_at_opt,
         #     validate_optimum=validate_optimum,
         #     grad_tol=self._grad_tol)
-        #
-    # def set_base_values(self,
-    #                     opt_par_value, hyper_par_value,
-    #                     hessian_at_opt, cross_hess_at_opt,
-    #                     validate_optimum=True, grad_tol=None):
-    #
-    #     # Set the values of the optimal parameters.
+
+    def _get_hessian_solver(self,
+                            opt_par_value,
+                            hyper_par_value,
+                            hessian_at_opt):
+        # Set the values of the Hessian at the optimum.
+        if hessian_at_opt is None:
+            obj_fun_hessian = autograd.hessian(self._objective_fun, argnum=0)
+            self._hess0 = obj_fun_hessian(opt_par_value, hyper_par_value)
+        else:
+            self._hess0 = hessian_at_opt
+        if self._hess0.shape != (len(opt_par_value), len(opt_par_value)):
+            raise ValueError('``hessian_at_opt`` is the wrong shape.')
+
+        hess_solver = solver_lib.get_cholesky_solver(self._hess0)
+        return hess_solver
+
+
+    def set_base_values(self,
+                        opt_par_value, hyper_par_value,
+                        hessian_at_opt, cross_hess_at_opt,
+                        validate_optimum=True, grad_tol=None):
+        # Set the values of the optimal parameters.
+        hess_solver = self._get_hessian_solver(
+            opt_par_value, hyper_par_value, hessian_at_opt)
+        EstimatingEquationLinearApproximation.set_location(
+            self,
+            input_val0=opt_par_value,
+            hyper_val0=hyper_par_value,
+            estimating_equation_jac0=cross_hess_at_opt,
+            validate_solution=validate_optimum,
+            solution_tol=grad_tol)
+
     #     self._opt0 = deepcopy(opt_par_value)
     #     self._hyper0 = deepcopy(hyper_par_value)
     #
