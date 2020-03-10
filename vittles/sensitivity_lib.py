@@ -180,8 +180,8 @@ class EstimatingEquationLinearApproximation:
         self._hyper_ee_fun_jac = \
             autograd.jacobian(self._hyper_par_estimating_equation, argnum=1)
 
-        self._solution_tol = solution_tol
         self._hess_solver = hess_solver
+        self._solution_tol = solution_tol
 
         self.set_location(
             input_val0, hyper_val0,
@@ -255,7 +255,8 @@ class EstimatingEquationLinearApproximation:
 
 
 
-class HyperparameterSensitivityLinearApproximation(EstimatingEquationLinearApproximation):
+class HyperparameterSensitivityLinearApproximation(
+    EstimatingEquationLinearApproximation):
     """
     Linearly approximate dependence of an optimum on a hyperparameter.
 
