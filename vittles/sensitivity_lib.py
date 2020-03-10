@@ -15,57 +15,71 @@ from paragami import FlattenFunctionInput
 from . import solver_lib
 
 
-def get_differentiable_function(input_val0, hyper_val0, dinput_dhyper):
+def get_linear_function(return_val0, arg_val0, dreturn_darg):
     """Return a differentiable function returning a pre-specified value and
     derivative.  This is most useful for using autodiff on functions of
     optimization parameters.
+
+    Parameters
+    --------------
+    return_val0 :  `numpy.ndarray` (N,)
+        The value returned by the function.
+    arg_val0 : `numpy.ndarray` (M,)
+        The value at which the function must be evaluated.
+    dreturn_darg : `numpy.ndarray` (N, M)
+        The Jacobian of the function mapping arg_val to return_val.
+
+    Returns
+    -------
+    get_return_par : `callable`
+        A function differentiable by autograd with the specified derivative.
     """
 
-    def _check_hyper_par_value(hyper_par, tolerance=1e-8):
-        if np.max(np.abs(hyper_par - hyper_val0)) > tolerance:
+    def _check_arg_par_value(arg_par, tolerance=1e-8):
+        if np.max(np.abs(arg_par - arg_val0)) > tolerance:
             raise ValueError(
-                'get_input_par must be evaluated at ',
-                hyper_val0, ' != ', hyper_par)
+                'get_return_par must be evaluated at ',
+                arg_val0, ' != ', arg_par)
 
     @primitive
-    def get_input_par(hyper_par):
-        """Evaluate the input as a differentiable function.
+    def get_return_par(arg_par):
+        """Evaluate the return as a differentiable function.
 
         Parameters
         -------------
-        hyper_par: numeric
-            The value must match `hyper_val0`, but it can be an
+        arg_par: numeric
+            The value must match `arg_val0`, but it can be an
             array box, allowing functions of the optimal parameter to be
             differentiated with `autograd`.
         """
 
-        _check_hyper_par_value(hyper_par)
-        return input_val0
+        _check_arg_par_value(arg_par)
+        return return_val0
 
     # Reverse mode.
-    def _get_parhat_vjp(ans, hyperpar):
-        _check_hyper_par_value(hyperpar)
+    def _get_parhat_vjp(ans, argpar):
+        _check_arg_par_value(argpar)
 
         # Make this primitive to prevent attempting higher-order derivatives.
         # To do so efficiently will require a higher order approximation.
         @primitive
         def vjp(g):
-            return g.T @ dinput_dhyper
+            return g.T @ dreturn_darg
         return vjp
 
     # Forward mode.
     # Make this primitive to prevent attempting higher-order derivatives.
     # To do so efficiently will require a higher order approximation.
     @primitive
-    def _get_parhat_jvp(g, ans, hyperpar):
-        _check_hyper_par_value(hyperpar)
-        return dinput_dhyper @ g
+    def _get_parhat_jvp(g, ans, argpar):
+        _check_arg_par_value(argpar)
+        return dreturn_darg @ g
 
     # Define the derivatives of `get_opt_par`
-    defvjp(get_input_par, _get_parhat_vjp)
-    defjvp(get_input_par, _get_parhat_jvp)
+    defvjp(get_return_par, _get_parhat_vjp)
+    defjvp(get_return_par, _get_parhat_jvp)
 
-    return get_input_par
+    return get_return_par
 
 
 class HyperparameterSensitivityLinearApproximation:
@@ -256,48 +270,8 @@ class HyperparameterSensitivityLinearApproximation:
     def get_opt_par_function(self):
         """Return a differentiable function returning the optimal value.
         """
-        return get_differentiable_function(
-            self._opt0, self._hyper0, self._sens_mat)
+        return get_linear_function(self._opt0, self._hyper0, self._sens_mat)
 
-        # @primitive
-        # def get_opt_par(hyper_par):
-        #     """Evaluate the optimum as a differentiable function.
-        #
-        #     Parameters
-        #     -------------
-        #     hyper_par: numeric
-        #         The value must match `hyper_par_value`, but it can be an
-        #         array box, allowing functions of the optimal parameter to be
-        #         differentiated with `autograd`.
-        #     """
-        #
-        #     self._check_hyper_par_value(hyper_par)
-        #     return self._opt0
-        #
-        # # Reverse mode.
-        # def _get_parhat_vjp(ans, hyperpar):
-        #     self._check_hyper_par_value(hyperpar)
-        #
-        #     # Make this primitive to prevent attempting higher-order derivatives.
-        #     # To do so efficiently will require a higher order approximation.
-        #     @primitive
-        #     def vjp(g):
-        #         return g.T @ self._sens_mat
-        #     return vjp
-        #
-        # # Forward mode.
-        # # Make this primitive to prevent attempting higher-order derivatives.
-        # # To do so efficiently will require a higher order approximation.
-        # @primitive
-        # def _get_parhat_jvp(g, ans, hyperpar):
-        #     self._check_hyper_par_value(hyperpar)
-        #     return self._sens_mat @ g
-        #
-        # # Define the derivatives of `get_opt_par`
-        # defvjp(get_opt_par, _get_parhat_vjp)
-        # defjvp(get_opt_par, _get_parhat_jvp)
-        #
-        # return get_opt_par
 
 ################################
 # Higher-order approximations. #
