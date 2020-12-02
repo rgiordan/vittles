@@ -1,5 +1,6 @@
 from vittles.sensitivity_lib import \
     HyperparameterSensitivityLinearApproximation, \
+    EstimatingEquationLinearApproximation, \
     ParametricSensitivityTaylorExpansion
 
 from vittles.sparse_hessian_lib import SparseBlockHessian
